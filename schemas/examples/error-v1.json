@@ -1,0 +1,7 @@
+{
+  "code": "approval_required",
+  "message": "Exact plan approval is required.",
+  "retryable": false,
+  "uncertain": false,
+  "mutation_possible": false
+}

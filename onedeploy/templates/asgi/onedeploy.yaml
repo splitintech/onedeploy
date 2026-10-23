@@ -1,0 +1,21 @@
+version: 1
+name: example-asgi
+provider: modal
+profile: asgi
+source:
+  path: .
+  entrypoint: modal_app.py
+  trust_code: true
+runtime:
+  timeout: 300
+  health_path: /health
+  ready_path: /ready
+target:
+  mode: create
+  account: REPLACE_WORKSPACE
+  environment: main
+  app: example-asgi
+  function: web
+variables: {}
+ingress:
+  mode: existing

@@ -1,0 +1,6 @@
+.env
+.env.*
+.git
+.onedeploy
+__pycache__
+*.pyc
