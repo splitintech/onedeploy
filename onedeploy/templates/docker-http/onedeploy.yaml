@@ -1,0 +1,26 @@
+version: 1
+name: example-http
+provider: railway
+profile: docker-http
+source:
+  path: .
+build:
+  context: .
+  dockerfile: Dockerfile
+runtime:
+  port: 8080
+  health_path: /health
+  ready_path: /ready
+  timeout: 300
+variables:
+  APP_GREETING:
+    type: string
+    secret: false
+    default: Hello-from-Onedeploy
+target:
+  account: REPLACE_ACCOUNT
+  project: REPLACE_PROJECT_ID
+  environment: REPLACE_ENVIRONMENT_ID
+  service: REPLACE_SERVICE_ID
+ingress:
+  mode: existing

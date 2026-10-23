@@ -1,0 +1,19 @@
+version: 1
+name: example-worker
+provider: railway
+profile: worker
+source:
+  path: .
+build:
+  context: .
+  dockerfile: Dockerfile
+runtime:
+  timeout: 300
+target:
+  account: REPLACE_ACCOUNT
+  project: REPLACE_PROJECT_ID
+  environment: REPLACE_ENVIRONMENT_ID
+  service: REPLACE_SERVICE_ID
+variables: {}
+ingress:
+  mode: existing

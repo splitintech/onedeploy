@@ -1,0 +1,32 @@
+version: 1
+name: example-model
+provider: daytona
+profile: model
+source:
+  path: .
+build:
+  context: .
+  dockerfile: Dockerfile
+  snapshot_name: REPLACE_UNIQUE_SNAPSHOT_NAME
+runtime:
+  port: 8000
+  health_path: /health
+  ready_path: /ready
+  timeout: 600
+target:
+  mode: create
+  account: REPLACE_ORGANIZATION_ID
+  sandbox: REPLACE_DEDICATED_SANDBOX_NAME
+resources:
+  auto_stop_minutes: 15
+ingress:
+  mode: private
+variables:
+  MODEL_CACHE:
+    type: string
+    secret: false
+    default: /tmp/onedeploy-model-cache
+  MODEL_CONCURRENCY:
+    type: integer
+    secret: false
+    default: 2
