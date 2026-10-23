@@ -27,19 +27,42 @@ def parser():
     p.add_argument("--version", action="version", version=__version__)
     p.add_argument("--json", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
-    for name in ("init", "config", "inspect", "plan", "deploy", "status", "logs", "doctor", "resume", "rollback", "schema", "tui"):
+    for name in ("init", "config", "inspect", "discover", "resolve", "export", "import", "plan", "deploy", "status", "logs", "doctor", "resume", "rollback", "schema", "tui"):
         c = sub.add_parser(name)
         c.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         if name == "config":
             c.add_argument("action", choices=["validate"])
+        if name in {"config", "inspect", "plan"}:
+            source = c.add_mutually_exclusive_group()
+            source.add_argument("--manifest", default="onedeploy.yaml")
+            source.add_argument("--profile", help="Resolved, source-bound profile from resolve")
+        if name == "tui":
+            mode = c.add_mutually_exclusive_group()
+            mode.add_argument("--manifest", help="Use the legacy manifest interface")
+            mode.add_argument("--wizard", action="store_true", help="Opt in to the experimental three-step project wizard")
+            c.add_argument("--path", help="Project folder or supported file for --wizard (default: current directory)")
         if name in {"config", "inspect", "plan", "tui"}:
-            c.add_argument("--manifest", default="onedeploy.yaml")
             c.add_argument("--env-file")
+        if name == "discover":
+            c.add_argument("--provider", required=True, choices=["daytona", "railway", "modal"])
+            c.add_argument("--path", default=".", help="Project folder or supported configuration file; never executes source")
+            c.add_argument("--out", help="Optionally save a private discovery artifact; existing files are never overwritten")
+        if name in {"resolve", "import"}:
+            if name == "resolve":
+                c.add_argument("--discovery", required=True)
+            else:
+                c.add_argument("--intent", required=True, help="Non-executable portable intent; creates a freshly bound local profile")
+                c.add_argument("--path", default=".", help="New local project folder; source is rediscovered, never relocated by rewriting hashes")
+            c.add_argument("--answers", help="Strict JSON containing nonsecret answers and variable references, never secret values")
+            c.add_argument("--out", help="Optionally save a private profile; existing files are never overwritten")
+        if name == "export":
+            c.add_argument("--profile", required=True, help="Validated local profile to export as non-executable portable intent")
+            c.add_argument("--out", help="Optionally save private intent outside source or under .onedeploy; no credentials, approval receipts or absolute source paths")
         if name in {"plan", "tui"}:
             c.add_argument("--allow-dirty", action="store_true")
             c.add_argument("--inspect-remote", action="store_true", help="Read authenticated provider identity and target before approval")
         if name == "plan":
-            c.add_argument("--out", default="plan.json")
+            c.add_argument("--out", help="Plan file (default: plan.json for manifests, .onedeploy/plan.json for profiles)")
         if name == "deploy":
             c.add_argument("--plan", required=True)
             c.add_argument("--approve-plan")
@@ -63,7 +86,7 @@ def parser():
         if name == "doctor":
             c.add_argument("--provider", required=True, choices=["daytona", "railway", "modal"])
         if name == "schema":
-            c.add_argument("--kind", choices=["manifest", "result", "progress", "error"], default="manifest")
+            c.add_argument("--kind", choices=["manifest", "discovery", "profile", "intent", "answers", "resolution", "result", "progress", "error"], default="manifest")
         if name == "init":
             c.add_argument("--provider", choices=["daytona", "railway", "modal"])
             for field in ("account", "project", "environment", "service", "sandbox", "app", "function", "snapshot-name"):
@@ -74,10 +97,56 @@ def parser():
 
 
 def envelope(command, result=None, error=None):
+    # Preserve the v1 envelope: failed commands have no successful result.
+    # Resolution questions are an additive, typed error.details object.
+    details = error.get("details") if error else result
+    next_actions = details.get("next_actions", []) if isinstance(details, dict) else []
+    if not next_actions and command in {"discover", "resolve", "import"}:
+        status = details.get("status") if isinstance(details, dict) else None
+        guidance = {
+            "ready": "Resolve the discovery artifact into a source-bound profile; review executable source before planning.",
+            "input_required": "Supply the listed missing fields as typed answers; reference runtime variables by environment name, never secret value.",
+            "conflict": "Choose an explicit candidate or correct conflicting source settings, then resolve again.",
+            "unsupported_capability": "Select a supported input/provider combination; unsupported behavior cannot be silently omitted.",
+        }
+        if status in guidance:
+            next_actions = [guidance[status]]
+        elif command in {"resolve", "import"} and not error:
+            next_actions = ["Validate and inspect the profile, then create a plan; deployment requires explicit approval of that exact plan."]
+        elif error and error.get("code") == "conflict":
+            next_actions = ["Choose a fresh artifact output path; existing files are never overwritten."]
+    if not next_actions and command == "export" and not error:
+        next_actions = ["Import this non-executable intent against a fresh local project with new source trust and target confirmation, then review a new plan."]
     return {"schema_version": "1", "command": command,
-            "status": "error" if error else "success", "result": result,
-            "error": error, "warnings": result.get("warnings", []) if isinstance(result, dict) else [],
-            "next_actions": result.get("next_actions", []) if isinstance(result, dict) else []}
+            "status": "error" if error else "success", "result": None if error else result,
+            "error": error, "warnings": details.get("warnings", []) if isinstance(details, dict) else [],
+            "next_actions": next_actions}
+
+
+def resolution_error(exc, command):
+    """Expose only validated questions, and never change legacy error payloads."""
+    error = exc.to_dict()
+    if command not in {"discover", "resolve", "import"} or exc.code not in {
+        "input_required", "conflict", "unsupported_capability"
+    }:
+        return error
+    details = getattr(exc, "result", None)
+    if not isinstance(details, dict) or not set(details) <= {
+        "status", "missing", "conflicts", "unsupported"
+    }:
+        return error
+    if details.get("status") != exc.code:
+        return error
+    try:
+        from jsonschema import Draft202012Validator
+        from . import discovery
+        if not Draft202012Validator(discovery.resolution_schema()).is_valid(details):
+            return error
+    except Exception:
+        # An error-reporting failure must never expose the original exception.
+        return error
+    error["details"] = details
+    return error
 
 
 def init_template(name, destination):
@@ -141,10 +210,17 @@ def create_project(provider, template, directory, targets):
 
 
 def machine_schema(kind):
+    from . import discovery
+    if kind in {"discovery", "profile", "intent", "answers", "resolution"}:
+        return getattr(discovery, kind + "_schema")()
+    details = discovery.resolution_schema()
+    details["properties"].pop("profile", None)
+    details["properties"]["status"] = {"enum": ["input_required", "conflict", "unsupported_capability"]}
     error = {"type": "object", "additionalProperties": False,
              "required": ["code", "message", "retryable", "uncertain", "mutation_possible"],
              "properties": {"code": {"type": "string"}, "message": {"type": "string"},
-                            **{key: {"type": "boolean"} for key in ("retryable", "uncertain", "mutation_possible")}}}
+                            **{key: {"type": "boolean"} for key in ("retryable", "uncertain", "mutation_possible")},
+                            "details": details}}
     if kind == "error":
         return {"$schema": "https://json-schema.org/draft/2020-12/schema", **error}
     if kind == "progress":
@@ -210,12 +286,47 @@ def dispatch(args):
             raise UsageError("Target arguments require an explicit --provider.")
         return init_template(args.template or "docker-http", args.directory)
     if cmd == "config":
-        return config.validate_config(config.load_manifest(args.manifest), env_file=args.env_file)
+        if args.profile:
+            from . import discovery
+            manifest, _ = discovery.validate_profile(args.profile)
+        else:
+            manifest = config.load_manifest(args.manifest)
+        return config.validate_config(manifest, env_file=args.env_file)
     if cmd == "inspect":
-        return core.inspect(args.manifest)
+        return core.inspect_profile(args.profile) if args.profile else core.inspect(args.manifest)
+    if cmd == "discover":
+        from . import discovery
+        result = discovery.discover(args.path, args.provider)
+        if args.out:
+            discovery.save_discovery(result, args.out)
+        return result
+    if cmd == "resolve":
+        from . import discovery
+        answers = discovery.read_answers(args.answers) if args.answers else None
+        result = discovery.resolve(args.discovery, answers)
+        if args.out:
+            discovery.save_profile(result, args.out)
+        return result
+    if cmd == "export":
+        from . import discovery
+        profile = discovery.read_profile(args.profile)
+        result = discovery.export_intent(profile)
+        if args.out:
+            discovery.save_intent(result, args.out, source_root=profile["discovery"]["root"])
+        return result
+    if cmd == "import":
+        from . import discovery
+        answers = discovery.read_answers(args.answers) if args.answers else None
+        result = discovery.import_intent(args.intent, args.path, answers)
+        if args.out:
+            discovery.save_profile(result, args.out)
+        return result
     if cmd == "plan":
-        plan = core.make_plan(args.manifest, env_file=args.env_file, allow_dirty=args.allow_dirty, inspect_remote=args.inspect_remote, plan_output=args.out)
-        core.save_plan(plan, args.out)
+        make_plan = core.make_plan_from_profile if args.profile else core.make_plan
+        source = args.profile or args.manifest
+        output = args.out or (".onedeploy/plan.json" if args.profile else "plan.json")
+        plan = make_plan(source, env_file=args.env_file, allow_dirty=args.allow_dirty, inspect_remote=args.inspect_remote, plan_output=output)
+        core.save_plan(plan, output)
         return plan
     if cmd == "deploy":
         return core.deploy(core.read_plan(args.plan), env_file=args.env_file,
@@ -249,13 +360,23 @@ def dispatch(args):
     if cmd == "tui":
         if args.json or not sys.stdin.isatty() or not sys.stdout.isatty():
             raise UsageError("TUI requires an interactive terminal; use plan and deploy for automation.")
+        if args.path and not args.wizard:
+            raise UsageError("Project paths require the experimental --wizard option; use --manifest for the legacy interface.")
         try:
-            from .tui import DeploymentApp
+            if args.wizard:
+                from .wizard import DeploymentWizard
+                app = DeploymentWizard(path=args.path or ".", env_file=args.env_file,
+                                       state_dir=args.state_dir, allow_dirty=args.allow_dirty,
+                                       inspect_remote=args.inspect_remote)
+            else:
+                from .tui import DeploymentApp
+                app = DeploymentApp(args.manifest or "onedeploy.yaml", args.env_file,
+                                    args.state_dir, args.allow_dirty, args.inspect_remote)
         except ModuleNotFoundError as exc:
-            if exc.name != "textual":
+            if exc.name != "textual" and not (exc.name or "").startswith("textual."):
                 raise
             raise UsageError("Install the tui extra: pip install 'onedeploy[tui]'.") from None
-        DeploymentApp(args.manifest, args.env_file, args.state_dir, args.allow_dirty, args.inspect_remote).run()
+        app.run()
         return {"closed": True}
     raise UsageError("Unknown command.")
 
@@ -277,7 +398,7 @@ def main(argv=None):
     except Exception as exc:
         from .errors import OnedeployError
         if isinstance(exc, OnedeployError):
-            output, code = envelope(command, error=exc.to_dict()), exc.exit_code
+            output, code = envelope(command, error=resolution_error(exc, command)), exc.exit_code
         else:
             # Never render raw exceptions: provider and OS exceptions can carry secrets.
             output, code = envelope(command, error={"code": "internal_error", "message": "Operation failed. Inspect configuration and local deployment state before retrying.", "retryable": False, "uncertain": True, "mutation_possible": command == "deploy"}), 1

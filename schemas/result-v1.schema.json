@@ -1,85 +1,192 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "command",
-    "status",
-    "result",
-    "error",
-    "warnings",
-    "next_actions"
-  ],
-  "properties": {
-    "schema_version": {
-      "const": "1"
-    },
-    "command": {
-      "type": "string"
-    },
-    "status": {
-      "enum": [
-        "success",
-        "error"
-      ]
-    },
-    "result": {
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "error": {
-      "anyOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "code",
-            "message",
-            "retryable",
-            "uncertain",
-            "mutation_possible"
-          ],
-          "properties": {
-            "code": {
-              "type": "string"
-            },
-            "message": {
-              "type": "string"
-            },
-            "retryable": {
-              "type": "boolean"
-            },
-            "uncertain": {
-              "type": "boolean"
-            },
-            "mutation_possible": {
-              "type": "boolean"
-            }
-          }
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "warnings": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "next_actions": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    }
-  },
   "allOf": [
     {
+      "else": {
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "details": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "additionalProperties": false,
+                "properties": {
+                  "conflicts": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "choices": {
+                          "items": {
+                            "type": [
+                              "string",
+                              "integer",
+                              "boolean"
+                            ]
+                          },
+                          "maxItems": 128,
+                          "type": "array"
+                        },
+                        "field": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "reason": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "string",
+                            "integer",
+                            "boolean",
+                            "object",
+                            "array",
+                            "choice"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "type",
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "missing": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "choices": {
+                          "items": {
+                            "type": [
+                              "string",
+                              "integer",
+                              "boolean"
+                            ]
+                          },
+                          "maxItems": 128,
+                          "type": "array"
+                        },
+                        "field": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "reason": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "string",
+                            "integer",
+                            "boolean",
+                            "object",
+                            "array",
+                            "choice"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "type",
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "status": {
+                    "enum": [
+                      "input_required",
+                      "conflict",
+                      "unsupported_capability"
+                    ]
+                  },
+                  "unsupported": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "choices": {
+                          "items": {
+                            "type": [
+                              "string",
+                              "integer",
+                              "boolean"
+                            ]
+                          },
+                          "maxItems": 128,
+                          "type": "array"
+                        },
+                        "field": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "reason": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "string",
+                            "integer",
+                            "boolean",
+                            "object",
+                            "array",
+                            "choice"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "type",
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "status",
+                  "missing",
+                  "conflicts",
+                  "unsupported"
+                ],
+                "type": "object"
+              },
+              "message": {
+                "type": "string"
+              },
+              "mutation_possible": {
+                "type": "boolean"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "uncertain": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable",
+              "uncertain",
+              "mutation_possible"
+            ],
+            "type": "object"
+          },
+          "result": {
+            "type": "null"
+          }
+        }
+      },
       "if": {
         "properties": {
           "status": {
@@ -93,42 +200,233 @@
             "type": "null"
           }
         }
-      },
-      "else": {
-        "properties": {
-          "error": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "code",
-              "message",
-              "retryable",
-              "uncertain",
-              "mutation_possible"
-            ],
-            "properties": {
-              "code": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              },
-              "retryable": {
-                "type": "boolean"
-              },
-              "uncertain": {
-                "type": "boolean"
-              },
-              "mutation_possible": {
-                "type": "boolean"
-              }
-            }
-          },
-          "result": {
-            "type": "null"
-          }
-        }
       }
     }
-  ]
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "details": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "conflicts": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "choices": {
+                        "items": {
+                          "type": [
+                            "string",
+                            "integer",
+                            "boolean"
+                          ]
+                        },
+                        "maxItems": 128,
+                        "type": "array"
+                      },
+                      "field": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      "type": {
+                        "enum": [
+                          "string",
+                          "integer",
+                          "boolean",
+                          "object",
+                          "array",
+                          "choice"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "field",
+                      "type",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "missing": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "choices": {
+                        "items": {
+                          "type": [
+                            "string",
+                            "integer",
+                            "boolean"
+                          ]
+                        },
+                        "maxItems": 128,
+                        "type": "array"
+                      },
+                      "field": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      "type": {
+                        "enum": [
+                          "string",
+                          "integer",
+                          "boolean",
+                          "object",
+                          "array",
+                          "choice"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "field",
+                      "type",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "status": {
+                  "enum": [
+                    "input_required",
+                    "conflict",
+                    "unsupported_capability"
+                  ]
+                },
+                "unsupported": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "choices": {
+                        "items": {
+                          "type": [
+                            "string",
+                            "integer",
+                            "boolean"
+                          ]
+                        },
+                        "maxItems": 128,
+                        "type": "array"
+                      },
+                      "field": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      "type": {
+                        "enum": [
+                          "string",
+                          "integer",
+                          "boolean",
+                          "object",
+                          "array",
+                          "choice"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "field",
+                      "type",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "status",
+                "missing",
+                "conflicts",
+                "unsupported"
+              ],
+              "type": "object"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mutation_possible": {
+              "type": "boolean"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "uncertain": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "uncertain",
+            "mutation_possible"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "next_actions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "result": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "const": "1"
+    },
+    "status": {
+      "enum": [
+        "success",
+        "error"
+      ]
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "command",
+    "status",
+    "result",
+    "error",
+    "warnings",
+    "next_actions"
+  ],
+  "type": "object"
 }

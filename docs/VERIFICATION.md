@@ -1,10 +1,27 @@
 # Verification report
 
-Checked 2026-10-23. Release candidate: 0.1.0, experimental and offline-tested.
+Checked 2026-10-23. Source version: 0.2.0a1, experimental. Historical baseline evidence and the new UX increment are recorded separately; the baseline count below is not a test result for later changes.
 
-## Evidence
+## Experimental U1–U5 increment
 
-- Final centralized test run: **257 passed in 31.21 seconds**, Linux, Python 3.12.14. Tests block network sockets and isolate provider credentials and home directories.
+**Final whole-tree aggregate: 506 passed in 233.98 seconds (3:53).** This run covers the final runtime source after the native-resource portable-binding fixes. Final independent review and the rebuilt installed-wheel checks below also passed. The [U1–U5 acceptance matrix](UX_ACCEPTANCE.md) distinguishes implemented/offline-tested behavior from manual usability, platform and live-provider qualification; these separate gates are not all closed.
+
+- **Final independent review:** no remaining concrete blockers in the reviewed source scope. Recovery-chain profile/source revalidation, env/trust clearing, source-owned portable storage/readiness/snapshot confirmation and direct edited-intent cases were rechecked. Real Compose dependency/storage flows produced matching API/CLI/wizard normalized configuration, with fresh trust enforced. A final focused intent/recovery run passed **43 tests**. This is not a security certification or live-provider qualification.
+- **Final rebuilt/reinstalled wheel:** Railway, Daytona and Modal each passed discovery → resolution → profile validation/inspection → offline planning → portable intent export → import into a second directory → a newly bound offline plan. All **nine** installed schema kinds passed, and `pip check` was clean. These checks were repeated after the final source-owned resource-binding correction; no provider/network calls were made.
+- **Environment:** Linux, **Python 3.12.14**, **Textual 8.2.8**. Modal import deliberately required fresh app/function confirmation. Other Python/OS environments and remote CI are not inferred from this local result.
+- **Contract/regression coverage:** passive supported/unsupported importer subsets; strict schemas, private exclusive outputs, secret references and typed outcomes; source/profile/intent drift; exact destination/trust confirmation; shared planning/approval; unchanged legacy commands; uncertain recovery and profile-origin journals; structured Compose dependency/storage resolution; keyboard/narrow-terminal/resize, cancellation/repeated submission and saved/portable reuse paths.
+
+No live provider call, login, deployment, package-registry publication or real application qualification was performed for this increment. Manual screen-reader/representative-newcomer and macOS/Windows checks remain unrun. The wizard remains opt-in; no promotion to default is implied.
+
+### Documentation and example validation
+
+- The documented minimal Railway/Dockerfile answers were exercised against a fresh synthetic committed Git project: `discover`, `resolve`, `inspect --profile`, `config validate --profile`, an offline `plan --profile`, and the original eight schema kinds completed successfully (13 CLI calls). The provider runner and socket connect were guarded. The source remained unchanged; no Onedeploy manifest was generated; the profile was mode 0600 and the preview was non-executable. An initial non-Git fixture was correctly rejected without `--allow-dirty`; the successful run used a clean Git fixture.
+- The portable-intent walkthrough then exercised 15 CLI calls across two source directories, including export, an intentionally incomplete import (exit 11), explicit fresh-target/trust import, offline planning and all nine current schema kinds. Network/provider calls were guarded. Both source trees remained unchanged; old target IDs/absolute root/trust were absent from intent; the resulting profile bound the new source and destination, without deployment authority.
+- Relative documentation targets were checked across README, CHANGELOG and 14 docs files (**16 files total**): zero broken local targets. Focused smoke checks are not manual newcomer usability evidence.
+
+## Historical merged-baseline evidence
+
+- Baseline centralized test run: **257 passed in 31.21 seconds**, Linux, Python 3.12.14. Tests block network sockets and isolate provider credentials and home directories.
 - Tests cover strict manifests/dotenv/dependency/storage/check contracts, secret handling, sanitized archive/config binding, project snapshot builds and immutable receipts, existing-volume attachments, remote configuration/identity/release correlation, target locks, uncertainty and snapshot-aware recovery, known-artifact rollback, route-specific auth checks, guided TUI flows, JSON schemas and packaged templates.
 - Independent review completed a schema-field applicability sweep and inspected the final preflight fixes, finding no remaining concrete blocking defect in the reviewed source-release scope. Review is not a security certification or live-provider qualification.
 - Wheel and source distribution built using `python -m build --no-isolation`. Wheel inspected for templates, placeholder environment files and absence of bytecode/cache files.
@@ -39,4 +56,4 @@ Install the wheel into a separate virtual environment, change outside the checko
 
 See [implementation status](IMPLEMENTATION_STATUS.md), [provider contracts](provider-contracts.md), and [recovery](RECOVERY.md) for the exact supported boundaries.
 
-The final source inventory scan found no populated environment files, private-key markers, common provider credential-token patterns, local state directories or bytecode among publication inputs. This bounded pattern/inventory check is not proof that every possible secret can be detected. Relative documentation links were checked with no broken local targets.
+The historical baseline source inventory scan found no populated environment files, private-key markers, common provider credential-token patterns, local state directories or bytecode among publication inputs. This bounded pattern/inventory check is not proof that every possible secret can be detected. Relative documentation links were checked with no broken local targets.

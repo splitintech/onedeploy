@@ -1,7 +1,172 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
   "additionalProperties": false,
+  "properties": {
+    "code": {
+      "type": "string"
+    },
+    "details": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "conflicts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "choices": {
+                "items": {
+                  "type": [
+                    "string",
+                    "integer",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 128,
+                "type": "array"
+              },
+              "field": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "reason": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "string",
+                  "integer",
+                  "boolean",
+                  "object",
+                  "array",
+                  "choice"
+                ]
+              }
+            },
+            "required": [
+              "field",
+              "type",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "missing": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "choices": {
+                "items": {
+                  "type": [
+                    "string",
+                    "integer",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 128,
+                "type": "array"
+              },
+              "field": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "reason": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "string",
+                  "integer",
+                  "boolean",
+                  "object",
+                  "array",
+                  "choice"
+                ]
+              }
+            },
+            "required": [
+              "field",
+              "type",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "input_required",
+            "conflict",
+            "unsupported_capability"
+          ]
+        },
+        "unsupported": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "choices": {
+                "items": {
+                  "type": [
+                    "string",
+                    "integer",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 128,
+                "type": "array"
+              },
+              "field": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "reason": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "string",
+                  "integer",
+                  "boolean",
+                  "object",
+                  "array",
+                  "choice"
+                ]
+              }
+            },
+            "required": [
+              "field",
+              "type",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "missing",
+        "conflicts",
+        "unsupported"
+      ],
+      "type": "object"
+    },
+    "message": {
+      "type": "string"
+    },
+    "mutation_possible": {
+      "type": "boolean"
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "uncertain": {
+      "type": "boolean"
+    }
+  },
   "required": [
     "code",
     "message",
@@ -9,21 +174,5 @@
     "uncertain",
     "mutation_possible"
   ],
-  "properties": {
-    "code": {
-      "type": "string"
-    },
-    "message": {
-      "type": "string"
-    },
-    "retryable": {
-      "type": "boolean"
-    },
-    "uncertain": {
-      "type": "boolean"
-    },
-    "mutation_possible": {
-      "type": "boolean"
-    }
-  }
+  "type": "object"
 }

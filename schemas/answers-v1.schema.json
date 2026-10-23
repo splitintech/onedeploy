@@ -1,0 +1,360 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidate": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "checks": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "auth_variable": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "expected_status": {
+            "maximum": 299,
+            "minimum": 200,
+            "type": "integer"
+          },
+          "name": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 2048,
+            "pattern": "^/(?!/)[A-Za-z0-9_./-]*$",
+            "type": "string"
+          },
+          "safety": {
+            "const": "read-only"
+          },
+          "unauthenticated_status": {
+            "enum": [
+              401,
+              403
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "safety"
+        ],
+        "type": "object"
+      },
+      "maxItems": 8,
+      "type": "array"
+    },
+    "dependencies": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "postgres",
+              "redis",
+              "http"
+            ]
+          },
+          "name": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "tls": {
+            "type": "boolean"
+          },
+          "variable": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "variable",
+          "tls",
+          "required"
+        ],
+        "type": "object"
+      },
+      "maxItems": 32,
+      "type": "array"
+    },
+    "ingress": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "private",
+            "existing"
+          ]
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+      "type": "string"
+    },
+    "profile": {
+      "enum": [
+        "docker-http",
+        "asgi",
+        "worker",
+        "model"
+      ]
+    },
+    "resources": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_stop_minutes": {
+          "maximum": 1048576,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cpu": {
+          "maximum": 1048576,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "disk_gb": {
+          "maximum": 1048576,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_mb": {
+          "maximum": 1048576,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "rollback": {
+      "additionalProperties": false,
+      "properties": {
+        "compatible": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        },
+        "health_path": {
+          "maxLength": 2048,
+          "pattern": "^/(?!/)[A-Za-z0-9_./-]*$",
+          "type": "string"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ready_path": {
+          "maxLength": 2048,
+          "pattern": "^/(?!/)[A-Za-z0-9_./-]*$",
+          "type": "string"
+        },
+        "ready_url": {
+          "maxLength": 2048,
+          "pattern": "^https://",
+          "type": "string"
+        },
+        "timeout": {
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "snapshot": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+      "type": "string"
+    },
+    "snapshot_name": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+      "type": "string"
+    },
+    "storage": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "access": {
+            "enum": [
+              "read-only",
+              "read-write"
+            ]
+          },
+          "attachment": {
+            "enum": [
+              "attach",
+              "existing"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "volume",
+              "model-cache"
+            ]
+          },
+          "mount_path": {
+            "maxLength": 1024,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+            "type": "string"
+          },
+          "resource_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+            "type": "string"
+          },
+          "single_writer": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "resource_id",
+          "mount_path",
+          "kind",
+          "access",
+          "single_writer"
+        ],
+        "type": "object"
+      },
+      "maxItems": 16,
+      "type": "array"
+    },
+    "target": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+          "type": "string"
+        },
+        "app": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+          "type": "string"
+        },
+        "environment": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+          "type": "string"
+        },
+        "function": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "create",
+            "existing"
+          ]
+        },
+        "project": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+          "type": "string"
+        },
+        "region": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+          "type": "string"
+        },
+        "sandbox": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+          "type": "string"
+        },
+        "service": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+          "type": "string"
+        },
+        "snapshot": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "trust_code": {
+      "type": "boolean"
+    },
+    "variables": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "required": {
+            "type": "boolean"
+          },
+          "required_if": {
+            "additionalProperties": false,
+            "properties": {
+              "equals": {
+                "type": [
+                  "string",
+                  "integer",
+                  "boolean"
+                ]
+              },
+              "variable": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "variable",
+              "equals"
+            ],
+            "type": "object"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "source": {
+            "pattern": "^env:[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "string",
+              "integer",
+              "boolean"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "maxProperties": 128,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "type": "object"
+    }
+  },
+  "required": [],
+  "type": "object"
+}

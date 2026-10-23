@@ -1,16 +1,58 @@
 # Configuration and secrets
 
-The manifest describes your source, target, variables and supported runtime profile. Use `onedeploy schema --json` for the implementation's authoritative schema. Unknown fields, duplicate YAML keys, custom tags, malformed inputs and unsupported combinations must fail before mutation.
+The normalized configuration describes your source, target, variables and supported runtime profile. It can come from passive discovery plus explicit answers, an optional saved profile, or an existing native manifest. No handwritten Onedeploy YAML is mandatory for supported imports. Use `onedeploy schema --json` for the implementation's authoritative schema. Unknown fields, duplicate YAML keys, custom tags, malformed inputs and unsupported combinations must fail before mutation.
 
 A `.env` file is data, never a shell script. It supports a documented restricted key/value grammar. Do not use command substitution, shell evaluation, automatic expansion or executable `source` statements. Duplicate keys are rejected. Errors should identify a key or line, never repeat the value.
 
-Runtime variables are explicitly declared. Provider account credentials are distinct from runtime variables. The operator must not forward its entire environment into an application. Required application secrets are resolved at execution rather than serialized into a plan. Store only references in versioned manifests.
+Runtime variables are explicitly declared. Provider account credentials are distinct from runtime variables. The operator must not forward its entire environment into an application. Required application secrets are resolved locally for validation/planning and again at execution, but are not serialized into a plan. Store only references in versioned manifests.
 
 Keep `.env`, plans, deployment journals and connection files private. Plans contain identifiers, paths and operational metadata even though values are redacted. Avoid adding local secret files anywhere a provider CLI might upload. Source bundle hashing binds the actual selected bytes, not just a Git commit label; changing those bytes requires replanning.
 
 Do not trust a manifest merely because it parses. Build files, Python deployment entrypoints and application startup code execute with meaningful permissions. Review them before using Onedeploy. Existing credentials may permit spending money or modifying live services.
 
 Read provider-specific documentation for how runtime variables are delivered. If the provider transport cannot deliver secrets safely, Onedeploy must reject that operation, not put values in process arguments or silently omit them.
+
+
+## Discovery and optional profiles
+
+`discover` and `resolve` use strict **version 1** local artifacts; `schema --kind discovery|answers|resolution|profile|intent --json` returns their schemas. These are distinct from the version-1 native manifest and the generic JSON envelope. A profile embeds a normalized native manifest, not arbitrary Compose/Railway/application YAML. See [IMPORTERS.md](IMPORTERS.md) for exact mappings and rejected semantics.
+
+- No artifact is saved by `discover` or `resolve` unless `--out` is supplied. The wizard holds discovery/profile/runtime input in memory unless the operator explicitly saves configuration. Necessary deployment journals and recovery/source artifacts are still retained by the core; declining profile export does not disable recovery records.
+- An explicitly saved discovery/profile file must be outside the inventoried project or inside its excluded `.onedeploy` directory. Existing files and symlinks are not overwritten. Outputs are exclusive mode-0600 files; newly created parent directories request mode 0700. On POSIX, saved input artifacts, including answers, must not be accessible to group/other (`chmod 600`). Existing parent-directory access is not a complete platform ACL audit.
+- Profiles contain absolute discovery/source roots, selected-path metadata, operational target IDs, source inventory, provenance, selected candidate, typed answers and their digest. They are **local source-bound exports, not portable profiles**. The separate [portable intent export/import](PORTABLE_INTENT.md) carries allowlisted reusable settings, not an executable profile or credentials. Moving a project requires fresh discovery/resolution, explicit source trust and new destination bindings; never edit roots or hashes to relocate a profile.
+- Original project files stay unchanged. The profile embeds a normalized `source.path: "."` against its explicitly bound root; it does not write a mandatory application manifest. A nested service/build root can be narrower than the original discovery scope, and changes elsewhere in that inventoried scope can still invalidate discovery.
+- Provider selection, account/workspace/organization, environment and resource identifiers remain explicit. An imported native target can be preserved but is still revalidated; a profile is neither login state nor permission to deploy. Switching provider requires a new resolution and plan, not credential or target transplantation.
+- Profiles carry runtime variable names, types and references, not resolved runtime secrets. Answers cannot supply variable `default` values; use a private env file/explicit environment for runtime values. Existing reviewed native nonsecret defaults are retained as ordinary configuration. Do not put credentials in identifiers, command strings or source. Credential-shaped-literal checks are not a general secret detector.
+- A profile includes the original discovery and deterministic resolution. Revalidation checks source inventory and replays the current importer/resolver. Editing a profile's content/hash or moving it does not grant a portable approval. Changed source, configuration, provider or answers require new evidence and a new reviewed plan; execution rechecks profile binding as well as the core's source/remote/runtime bindings.
+
+`plan --profile` writes `.onedeploy/plan.json` relative to the current working directory unless `--out` is supplied. Profile-derived plan saves also refuse overwrite and require an output outside the bound source or inside `.onedeploy`; choose new reviewed filenames for new plans. The legacy manifest plan default/save behavior is unchanged.
+
+To reopen a saved profile in the wizard, enter its JSON path in Step 2 and use **Load saved profile from this path** (the Discover action also recognizes it). The source binding and provider must match. Saved settings are retained, but code trust resets and no plan approval is loaded: review the source and resolve again. Exports default to the selected root’s `.onedeploy/profile.json` and `.onedeploy/plan.json`, and require new filenames when a file already exists.
+
+Use `config validate --profile FILE [--env-file FILE] --json`, `inspect --profile FILE --json` and `plan --profile FILE ...` for the resolved route. Each `--profile` is mutually exclusive with `--manifest`. `inspect` is local configuration/capability inspection, not provider authentication. Only `plan --inspect-remote` opts into provider reads.
+
+### Minimal no-YAML answers example
+
+For a single root Dockerfile with `EXPOSE 8000`, Railway can be resolved using the following answers JSON. These identifiers are examples, not real targets; select and replace them deliberately. When discovery finds multiple inputs/services, also set `candidate` to the exact returned candidate ID.
+
+```json
+{
+  "name": "demo",
+  "profile": "docker-http",
+  "target": {
+    "account": "owner",
+    "project": "project",
+    "environment": "staging",
+    "service": "web"
+  },
+  "runtime": {"port": 8000},
+  "trust_code": true
+}
+```
+
+`trust_code: true` is an explicit review assertion, not something an agent should invent to make validation succeed. Without an `EXPOSE` declaration, no port is inferred; supply the actual listener metadata when needed for reviewed checks. Answers may declare supported runtime variables as references such as `"API_TOKEN": {"type": "string", "secret": true, "source": "env:API_TOKEN"}` inside `variables`, never the token value. Compose dependency/storage requirements need complete structured mappings and remain subject to provider capability checks.
+
+The [agent walkthrough](AGENT_CLI.md) covers the full `discover → resolve → plan → approved deploy → observe/reconcile` sequence. Keep all discovery/answer/profile/plan files private and outside upload contexts where practical.
 
 ## Conditional values and readiness
 

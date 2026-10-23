@@ -2,6 +2,13 @@
 
 | Symptom | Safe next action |
 | --- | --- |
+| `discover` succeeds but reports missing/conflicting inputs | The scan completed, not the deployment configuration. Choose the intended candidate/service and answer the typed questions; run `resolve` again. |
+| `input_required` / `conflict` / `unsupported_capability` | Inspect the JSON error details (exit 11/12/13). Add missing nonsecret answers, select explicitly, or change packaging. Do not discard unsupported dependencies, mounts, authentication or lifecycle behavior. |
+| File recognized but no supported importer | Read the exact matrix in [IMPORTERS.md](IMPORTERS.md). Recognition of Kubernetes, Helm, CI or arbitrary YAML is not semantic import. Use a reviewed supported artifact/manifest; renaming the file does not convert it. |
+| Discovery/profile became stale | Original inputs changed, or the profile was moved away from its bound source. Re-discover and resolve, review provenance and plan again. Never patch hashes to bypass binding. |
+| Artifact output already exists | Choose a new private path outside the project, or deliberately manage the old local artifact. Discovery/profile saves refuse overwrite; never use a source file as output. |
+| Wizard will not deploy a local preview | Explicit read-only remote inspection and a newly reviewed executable plan are required. Tool availability alone is not authentication. |
+| `--wizard` is unavailable in an older checkout | Use a reviewed checkout containing the experimental increment. The historical manifest workflow remains supported; installing an unrelated registry package is not a fix. |
 | Invalid YAML/schema or duplicate variable | Correct the named field/key locally; do not paste secret values into reports. Unknown fields are rejected, not ignored. |
 | Env file permission/symlink rejection | Use an explicitly selected regular private file; on POSIX make it mode 0600. Do not loosen protection to bypass validation. |
 | Provider command/version missing | Install the documented official version yourself, then run doctor. Onedeploy does not log in or persist credentials automatically. |

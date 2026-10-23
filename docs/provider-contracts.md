@@ -2,6 +2,12 @@
 
 Status: **experimental/offline-tested**, not staging-qualified. No cloud deployment, login, resource creation, or credential creation was performed during implementation. Contract fixtures validate construction and parsing, not live behavior. Provider acceptance, running state, readiness, ingress authentication and application qualification are separate layers.
 
+## Importers do not expand provider capabilities
+
+The experimental wizard and JSON `discover → resolve → plan` path feed these same adapters. [Importer recognition](IMPORTERS.md) is separate from provider/profile support. A Compose service is not automatically a multi-service deployment; a Dockerfile is not a Modal ASGI entrypoint; detecting an application name does not establish an authenticated target. Exact identity and remote preconditions are checked only after explicit read-only inspection.
+
+`doctor` reports local executable/SDK/version prerequisites, not login state. The wizard labels authentication as unchecked until the operator requests remote inspection. Missing tools and authentication require deliberate operator setup using the official references below; Onedeploy never silently installs a CLI, logs in, creates tokens or saves credentials.
+
 ## Adapter API
 
 `get_adapter(name)` returns `validate(manifest)`, `plan(manifest)` (`plan_steps` alias), `command(manifest, operation)`, `parse(operation, stdout)`, `assert_target(manifest, identity, inspection)`, and `rollback_steps(manifest, release)`. Capability metadata is JSON serializable. Commands are immutable data for the core runner, never an execution shortcut.

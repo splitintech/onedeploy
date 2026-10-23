@@ -1,0 +1,744 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "expected": {
+      "additionalProperties": false,
+      "properties": {
+        "manifest": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "build": {
+              "additionalProperties": false,
+              "properties": {
+                "context": {
+                  "maxLength": 1024,
+                  "minLength": 1,
+                  "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_. /-]+$",
+                  "type": "string"
+                },
+                "dockerfile": {
+                  "maxLength": 1024,
+                  "minLength": 1,
+                  "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_. /-]+$",
+                  "type": "string"
+                }
+              },
+              "required": [],
+              "type": "object"
+            },
+            "checks": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "auth_variable": {
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                    "type": "string"
+                  },
+                  "expected_status": {
+                    "maximum": 299,
+                    "minimum": 200,
+                    "type": "integer"
+                  },
+                  "name": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+                    "type": "string"
+                  },
+                  "path": {
+                    "maxLength": 2048,
+                    "pattern": "^/(?!/)[A-Za-z0-9_./-]*$",
+                    "type": "string"
+                  },
+                  "safety": {
+                    "const": "read-only"
+                  },
+                  "unauthenticated_status": {
+                    "enum": [
+                      401,
+                      403
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "path",
+                  "safety"
+                ],
+                "type": "object"
+              },
+              "maxItems": 8,
+              "type": "array"
+            },
+            "dependencies": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "postgres",
+                      "redis",
+                      "http"
+                    ]
+                  },
+                  "name": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+                    "type": "string"
+                  },
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "tls": {
+                    "type": "boolean"
+                  },
+                  "variable": {
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "kind",
+                  "variable",
+                  "tls",
+                  "required"
+                ],
+                "type": "object"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "ingress": {
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "private",
+                    "existing"
+                  ]
+                }
+              },
+              "required": [],
+              "type": "object"
+            },
+            "name": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+              "type": "string"
+            },
+            "profile": {
+              "enum": [
+                "docker-http",
+                "asgi",
+                "worker",
+                "model"
+              ]
+            },
+            "provider": {
+              "enum": [
+                "daytona",
+                "railway",
+                "modal"
+              ]
+            },
+            "resources": {
+              "additionalProperties": false,
+              "properties": {
+                "auto_stop_minutes": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "cpu": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "disk_gb": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "memory_mb": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [],
+              "type": "object"
+            },
+            "rollback": {
+              "additionalProperties": false,
+              "properties": {
+                "compatible": {
+                  "type": "boolean"
+                }
+              },
+              "required": [],
+              "type": "object"
+            },
+            "runtime": {
+              "additionalProperties": false,
+              "properties": {
+                "health_path": {
+                  "maxLength": 2048,
+                  "pattern": "^/(?!/)[A-Za-z0-9_./-]*$",
+                  "type": "string"
+                },
+                "port": {
+                  "maximum": 65535,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "ready_path": {
+                  "maxLength": 2048,
+                  "pattern": "^/(?!/)[A-Za-z0-9_./-]*$",
+                  "type": "string"
+                },
+                "timeout": {
+                  "maximum": 3600,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [],
+              "type": "object"
+            },
+            "source": {
+              "additionalProperties": false,
+              "properties": {
+                "entrypoint": {
+                  "maxLength": 1024,
+                  "minLength": 1,
+                  "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_. /-]+$",
+                  "type": "string"
+                }
+              },
+              "required": [],
+              "type": "object"
+            },
+            "storage": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "access": {
+                    "enum": [
+                      "read-only",
+                      "read-write"
+                    ]
+                  },
+                  "attachment": {
+                    "enum": [
+                      "attach",
+                      "existing"
+                    ]
+                  },
+                  "kind": {
+                    "enum": [
+                      "volume",
+                      "model-cache"
+                    ]
+                  },
+                  "mount_path": {
+                    "maxLength": 1024,
+                    "pattern": "^/",
+                    "type": "string"
+                  },
+                  "name": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+                    "type": "string"
+                  },
+                  "single_writer": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "mount_path",
+                  "kind",
+                  "access",
+                  "single_writer"
+                ],
+                "type": "object"
+              },
+              "maxItems": 16,
+              "type": "array"
+            },
+            "variables": {
+              "additionalProperties": {
+                "additionalProperties": false,
+                "properties": {
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "secret": {
+                    "type": "boolean"
+                  },
+                  "source": {
+                    "pattern": "^env:[A-Za-z_][A-Za-z0-9_]*$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "string",
+                      "integer",
+                      "boolean"
+                    ]
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "maxProperties": 128,
+              "propertyNames": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "type": "object"
+            },
+            "version": {
+              "const": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "questions": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "choices": {
+                "items": {
+                  "type": [
+                    "string",
+                    "integer",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 128,
+                "type": "array"
+              },
+              "field": {
+                "enum": [
+                  "runtime.port",
+                  "dependencies",
+                  "storage",
+                  "snapshot",
+                  "target.function"
+                ]
+              },
+              "reason": {
+                "enum": [
+                  "EXPOSE is dynamic or non-TCP; select the actual HTTP listener port",
+                  "EXPOSE is metadata, not proof of the listener; explicitly confirm a port",
+                  "Compose host publication is not imported; confirm the container listener port",
+                  "Map every selected-service dependency to an explicit external dependency with TLS/runtime references",
+                  "Map every named mount to an explicit existing provider storage resource without changing path/access",
+                  "Choose the ASGI function used for verification; original application is retained",
+                  "Select an existing reviewed snapshot; remote inspection must bind its immutable image before deployment"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "string",
+                  "integer",
+                  "boolean",
+                  "object",
+                  "array",
+                  "choice"
+                ]
+              }
+            },
+            "required": [
+              "field",
+              "type",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "maxItems": 512,
+          "type": "array"
+        }
+      },
+      "required": [
+        "manifest",
+        "questions"
+      ],
+      "type": "object"
+    },
+    "kind": {
+      "const": "intent"
+    },
+    "provider": {
+      "enum": [
+        "railway",
+        "daytona",
+        "modal"
+      ]
+    },
+    "requirements": {
+      "additionalProperties": false,
+      "properties": {
+        "ready_url": {
+          "type": "boolean"
+        },
+        "snapshot": {
+          "enum": [
+            "none",
+            "existing",
+            "build"
+          ]
+        },
+        "storage": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "access": {
+                "enum": [
+                  "read-only",
+                  "read-write"
+                ]
+              },
+              "attachment": {
+                "enum": [
+                  "attach",
+                  "existing"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "volume",
+                  "model-cache"
+                ]
+              },
+              "mount_path": {
+                "maxLength": 1024,
+                "pattern": "^/",
+                "type": "string"
+              },
+              "name": {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+                "type": "string"
+              },
+              "single_writer": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "mount_path",
+              "kind",
+              "access",
+              "single_writer"
+            ],
+            "type": "object"
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
+        "target_fields": {
+          "items": {
+            "enum": [
+              "account",
+              "project",
+              "environment",
+              "service",
+              "sandbox",
+              "snapshot",
+              "region",
+              "app",
+              "function",
+              "mode"
+            ]
+          },
+          "maxItems": 10,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "target_fields",
+        "storage",
+        "snapshot",
+        "ready_url"
+      ],
+      "type": "object"
+    },
+    "selection": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "enum": [
+            "manifest",
+            "dockerfile",
+            "compose",
+            "railway",
+            "modal",
+            "snapshot"
+          ]
+        },
+        "path": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_. /-]+$",
+          "type": "string"
+        },
+        "service": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,254}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_path": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_. /-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "path",
+        "source_path",
+        "service"
+      ],
+      "type": "object"
+    },
+    "settings": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "auth_variable": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              },
+              "expected_status": {
+                "maximum": 299,
+                "minimum": 200,
+                "type": "integer"
+              },
+              "name": {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+                "type": "string"
+              },
+              "path": {
+                "maxLength": 2048,
+                "pattern": "^/(?!/)[A-Za-z0-9_./-]*$",
+                "type": "string"
+              },
+              "safety": {
+                "const": "read-only"
+              },
+              "unauthenticated_status": {
+                "enum": [
+                  401,
+                  403
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "path",
+              "safety"
+            ],
+            "type": "object"
+          },
+          "maxItems": 8,
+          "type": "array"
+        },
+        "dependencies": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "postgres",
+                  "redis",
+                  "http"
+                ]
+              },
+              "name": {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+                "type": "string"
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "tls": {
+                "type": "boolean"
+              },
+              "variable": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "variable",
+              "tls",
+              "required"
+            ],
+            "type": "object"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "ingress": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "private",
+                "existing"
+              ]
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "name": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
+          "type": "string"
+        },
+        "profile": {
+          "enum": [
+            "docker-http",
+            "asgi",
+            "worker",
+            "model"
+          ]
+        },
+        "resources": {
+          "additionalProperties": false,
+          "properties": {
+            "auto_stop_minutes": {
+              "maximum": 1048576,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "cpu": {
+              "maximum": 1048576,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "disk_gb": {
+              "maximum": 1048576,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "memory_mb": {
+              "maximum": 1048576,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "rollback": {
+          "additionalProperties": false,
+          "properties": {
+            "compatible": {
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "runtime": {
+          "additionalProperties": false,
+          "properties": {
+            "health_path": {
+              "maxLength": 2048,
+              "pattern": "^/(?!/)[A-Za-z0-9_./-]*$",
+              "type": "string"
+            },
+            "port": {
+              "maximum": 65535,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "ready_path": {
+              "maxLength": 2048,
+              "pattern": "^/(?!/)[A-Za-z0-9_./-]*$",
+              "type": "string"
+            },
+            "timeout": {
+              "maximum": 3600,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "variables": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "required": {
+                "type": "boolean"
+              },
+              "secret": {
+                "type": "boolean"
+              },
+              "source": {
+                "pattern": "^env:[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "string",
+                  "integer",
+                  "boolean"
+                ]
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "maxProperties": 128,
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "type": "object"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "version": {
+      "const": 1,
+      "type": "integer"
+    },
+    "warnings": {
+      "items": {
+        "enum": [
+          "Portable intent is non-executable and contains no source identity or approval.",
+          "Review the newly discovered code and explicitly confirm the new provider destination, storage and runtime secret sources.",
+          "Only transported static settings are compared; changed application code requires fresh review and a newly approved plan."
+        ]
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "version",
+    "kind",
+    "provider",
+    "selection",
+    "expected",
+    "settings",
+    "requirements",
+    "warnings"
+  ],
+  "type": "object"
+}
