@@ -44,3 +44,9 @@ Do not approve the resulting plan until the artifact, configuration, compatibili
 ## Explicit reconciliation
 
 `resume --deployment ID --json` obtains fresh evidence. A safe interrupted no-write case can produce a separately approved recovery plan. Ambiguous writes require operator review; when sufficient external evidence establishes the outcome, the paired `--resolve-with-observation HASH --outcome operator-confirmed-completed|operator-confirmed-not-executed` arguments record that assertion. This is not independent proof or a hidden retry command. An agent needs the trusted external approval boundary to make that assertion.
+
+## Wizard and profile-based plans
+
+The experimental wizard keeps recovery in Advanced and surfaces it for interrupted/uncertain outcomes. This changes navigation, not recovery authority. A profile-derived deployment is journaled through the same core as a manifest deployment; no hidden second execution path or automatic write retry is added. A saved profile is configuration evidence, not a replacement for the private operation journal, retained source artifact or provider receipt.
+
+The wizard's **Deploy this plan** action avoids manual hash entry for the reviewed plan. Loading a different plan, changing source/provider/configuration or resolving a recovery plan requires review again. Agent callers retain explicit `--approve-plan` and their trusted external authorization boundary. Neither a UI button nor a plan ID independently proves that an external agent has the user's permission.

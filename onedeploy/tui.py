@@ -126,7 +126,7 @@ class DeploymentApp(App):
             self.invalidate()
 
     def on_select_changed(self, event: Select.Changed):
-        if event.select.id == "new-provider" and event.value is not Select.BLANK:
+        if event.select.id == "new-provider" and event.value is not Select.NULL:
             provider = str(event.value)
             template = self.query_one("#new-template", Select)
             template.set_options([(name, name) for name in PROVIDER_TEMPLATES[provider]])
@@ -209,7 +209,7 @@ class DeploymentApp(App):
                             self.say("A variable has the wrong type. Use integers or true/false as labeled; values are not displayed.")
                             field.focus()
                             return
-            if action == "resolve" and (not self.query_one("#resolution-consent", Checkbox).value or not self.query_one("#observation", Input).value or self.query_one("#outcome", Select).value is Select.BLANK):
+            if action == "resolve" and (not self.query_one("#resolution-consent", Checkbox).value or not self.query_one("#observation", Input).value or self.query_one("#outcome", Select).value is Select.NULL):
                 self.say("Supply fresh observation evidence, an independently confirmed outcome, and explicit authorization. The observation ID alone is not consent.")
                 return
             if action == "deploy" and (not self.plan or self.query_one("#approval", Input).value != self.plan["id"]):

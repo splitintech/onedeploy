@@ -62,7 +62,7 @@ def _private_dir(path):
         _error("invalid_config","State directory must have private permissions (chmod 700)")
     return p
 
-def _atomic(path,data):
+def _atomic(path,data,exclusive=False):
     if len(data)>MAX_STATE: _error("invalid_config","Plan or journal exceeds the state size limit")
     path=_no_symlink(path)
     path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -71,7 +71,13 @@ def _atomic(path,data):
         os.fchmod(fd,0o600)
         with os.fdopen(fd,"wb") as stream:
             stream.write(data); stream.flush(); os.fsync(stream.fileno())
-        os.replace(tmp,path)
+        if exclusive:
+            try:
+                os.link(tmp,path)
+            except FileExistsError:
+                _error("conflict", "Plan output already exists; choose a new path, originals are never overwritten")
+        else:
+            os.replace(tmp,path)
         if os.name=="posix":
             parent_fd=os.open(path.parent,os.O_RDONLY)
             try: os.fsync(parent_fd)
@@ -162,6 +168,43 @@ def make_plan(manifest_path,env_file=None,allow_dirty=False,env_overrides=None,i
     manifest_path=secure_path(manifest_path)
     manifest=load_manifest(manifest_path)
     root=_no_symlink(manifest_path.parent/manifest["source"]["path"])
+    return _make_plan(manifest, root, str(manifest_path), env_file, allow_dirty,
+                      env_overrides, inspect_remote, plan_output)
+
+
+def make_plan_from_profile(profile, env_file=None, allow_dirty=False, env_overrides=None,
+                           inspect_remote=False, plan_output=None):
+    """Plan an already resolved profile without writing application configuration.
+
+    Profile evidence is retained in the immutable plan and rechecked before apply.
+    No provider inspection occurs unless explicitly requested.
+    """
+    from . import discovery
+    if not isinstance(profile, dict):
+        profile = discovery.read_profile(profile)
+    profile = json.loads(canonical(profile))
+    manifest, root = discovery.validate_profile(profile)
+    if plan_output is not None:
+        _profile_output_path(profile, root, plan_output)
+    plan = _make_plan(manifest, _no_symlink(root), None, env_file, allow_dirty,
+                      env_overrides, inspect_remote, plan_output)
+    plan["normalized_profile"] = profile
+    plan["id"] = _plan_id(plan)
+    return plan
+
+
+def _profile_output_path(profile, root, output):
+    """Do not mutate discovery inputs or silently exempt arbitrary source paths."""
+    output = _no_symlink(output)
+    discovery_root = _no_symlink(profile.get("discovery", {}).get("root", root))
+    if output.is_relative_to(discovery_root) and ".onedeploy" not in output.relative_to(discovery_root).parts:
+        _error("invalid_config", "Profile plan output must be outside discovered source or inside .onedeploy")
+    return output
+
+
+def _make_plan(manifest, root, manifest_path, env_file=None, allow_dirty=False,
+               env_overrides=None, inspect_remote=False, plan_output=None):
+    validate_manifest(manifest)
     for section,key in [("build","context"),("build","dockerfile"),("source","entrypoint")]:
         value=manifest.get(section,{}).get(key)
         if value:
@@ -184,7 +227,7 @@ def make_plan(manifest_path,env_file=None,allow_dirty=False,env_overrides=None,i
     if manifest["source"].get("revision") and manifest["source"]["revision"]!=source["revision"]:
         _error("invalid_config","Declared source revision does not match checkout")
     operations=adapter.plan(effective)
-    plan={"version":PLAN_VERSION,"kind":"deploy","manifest":manifest,"manifest_path":str(manifest_path),
+    plan={"version":PLAN_VERSION,"kind":"deploy","manifest":manifest,"manifest_path":manifest_path,
           "source":source,"adapter_version":getattr(adapter,"version","1"),"operations":operations,
           "variable_references":{k:v.get("source",f"env:{k}") for k,v in manifest.get("variables",{}).items() if k in variables},
           "config_binding":_binding(root,variables,True),"remote_preconditions":None,
@@ -226,7 +269,9 @@ def save_plan(plan,path):
     root=Path(plan["source"]["root"])
     if output.is_relative_to(root) and str(output) not in plan["source"].get("excluded_paths",[]) and output.name not in {"plan.json","recovery-plan.json","rollback-plan.json"} and ".onedeploy" not in output.relative_to(root).parts:
         _error("invalid_config","Plan output inside source must be selected at planning time")
-    _atomic(path,canonical(plan)+b"\n")
+    if "normalized_profile" in plan:
+        _profile_output_path(plan["normalized_profile"], root, output)
+    _atomic(path,canonical(plan)+b"\n",exclusive="normalized_profile" in plan)
     return {"id":plan["id"],"path":str(Path(path).absolute())}
 
 def read_plan(path):
@@ -240,7 +285,7 @@ def verify_plan(plan):
     if not isinstance(plan,dict) or plan.get("version")!=PLAN_VERSION or plan.get("id")!=_plan_id(plan):
         _error("stale_plan","Plan contents do not match the canonical plan ID")
     required={"version","kind","manifest","manifest_path","source","adapter_version","operations","variable_references","config_binding","remote_preconditions","warnings","qualification","id"}
-    if set(plan)-required-{"rollback_to","rollback_from","recovery_of","resolution_of","resolution_observation","release_tag","rollback_artifact","artifact_receipt"} or required-set(plan): _error("invalid_config","Unknown or missing plan fields")
+    if set(plan)-required-{"rollback_to","rollback_from","recovery_of","resolution_of","resolution_observation","release_tag","rollback_artifact","artifact_receipt","normalized_profile"} or required-set(plan): _error("invalid_config","Unknown or missing plan fields")
     validate_manifest(plan["manifest"])
     if plan["kind"] not in {"deploy","rollback"}: _error("unsupported","This plan kind cannot be executed")
     if plan["kind"]=="rollback" and (not isinstance(plan.get("rollback_to"),str) or not plan.get("rollback_from")):
@@ -468,6 +513,24 @@ def deploy(plan,env_file=None,approval=None,state_dir=None,env_overrides=None,ca
     if approval!=plan["id"]: _error("approval_required","Explicit approval of this exact plan is required")
     if plan["remote_preconditions"] is None:
         _error("stale_plan","Local-only preview cannot execute; regenerate with remote inspection")
+    if "normalized_profile" in plan and plan["kind"] == "deploy":
+        from . import discovery
+        profile_manifest, profile_root = discovery.validate_profile(plan["normalized_profile"])
+        resolved_recovery = False
+        if plan.get("resolution_of"):
+            parent = _read_journal(_journal_path(_state_dir(plan, state_dir), plan["resolution_of"]))
+            if (parent.get("state") != "operator_resolved"
+                or parent.get("recovery_plan_id") != plan["id"]
+                or parent.get("operator_resolution", {}).get("observation_id") != plan.get("resolution_observation")
+                or parent.get("plan", {}).get("normalized_profile") != plan["normalized_profile"]):
+                _error("stale_plan", "Profile recovery is not bound to the recorded resolution plan")
+            resolved_recovery = True
+        if plan.get("artifact_receipt") and not (resolved_recovery and plan["manifest"]["provider"] == "daytona"):
+            _error("stale_plan", "Snapshot receipt is not a journal-bound Daytona recovery")
+        if not resolved_recovery and profile_manifest != plan["manifest"]:
+            _error("stale_plan", "Normalized profile differs from the reviewed configuration")
+        if str(profile_root) != plan["source"]["root"]:
+            _error("stale_plan", "Normalized profile source differs from the reviewed bundle")
     manifest=plan["manifest"]
     variables=resolve_variables(manifest,env_file,env_overrides)
     effective=_runtime_manifest(manifest,variables)
@@ -669,6 +732,19 @@ def _resume_locked(deployment_id,directory,journal,resolve_with_observation,outc
         recovery["remote_preconditions"]=_observe(adapter,manifest,plan["source"]["root"])
         _set_release_tag(recovery,adapter,manifest)
         recovery["id"]=_plan_id(recovery)
+        if plan.get("normalized_profile") and plan.get("resolution_of"):
+            # A cancelled, no-write recovery may itself be resumed. Advance the
+            # original resolution's exact child binding under the target lock,
+            # without granting an arbitrary rehashed plan a profile exemption.
+            origin_path = _journal_path(directory, plan["resolution_of"])
+            origin = _read_journal(origin_path)
+            if (origin.get("state") != "operator_resolved"
+                or origin.get("recovery_plan_id") not in {plan["id"], recovery["id"]}
+                or origin.get("operator_resolution", {}).get("observation_id") != plan.get("resolution_observation")
+                or origin.get("plan", {}).get("normalized_profile") != plan["normalized_profile"]):
+                _error("stale_plan", "Profile recovery is not bound to its operator-resolution journal")
+            origin["recovery_plan_id"] = recovery["id"]
+            _atomic(origin_path, canonical(origin))
         return {"deployment_id":deployment_id,"state":"approval_required","mutation_performed":False,"plan":recovery,
                 "next_actions":["No provider operation began. Review and approve this separate recovery plan."]}
     root=plan["source"]["root"]
@@ -720,6 +796,8 @@ def _resume_locked(deployment_id,directory,journal,resolve_with_observation,outc
             _set_release_tag(recovery,adapter,effective)
             recovery["warnings"].append("Earlier outcome was resolved by operator assertion; this is a separate proposed execution, not an automatic retry.")
             recovery["id"]=_plan_id(recovery)
+            journal["recovery_plan_id"] = recovery["id"]
+            _atomic(_journal_path(directory,deployment_id),canonical(journal))
         return {"deployment_id":deployment_id,"state":"operator_resolved","observed":observed,"observation_id":observation_id,
                 "mutation_performed":False,"plan":recovery,"next_actions":["No provider action was retried. Review a new plan before any further execution."]}
     return {"deployment_id":deployment_id,"state":"reconciliation_required","observed":observed,"observation_id":observation_id,
@@ -900,6 +978,17 @@ def _listener_warnings(manifest):
 def inspect(manifest_path):
     manifest=load_manifest(manifest_path); adapter=_adapter(manifest); adapter.validate(manifest)
     return {"manifest":manifest,"capabilities":getattr(adapter,"capabilities",{}),"operations":adapter.plan(manifest),"remote_inspected":False,"warnings":_listener_warnings(manifest)}
+
+def inspect_profile(profile):
+    """Inspect capabilities for resolved input without provider reads or writes."""
+    from . import discovery
+    manifest, _ = discovery.validate_profile(profile)
+    adapter = _adapter(manifest)
+    adapter.validate(manifest)
+    return {"manifest": manifest, "capabilities": getattr(adapter, "capabilities", {}),
+            "operations": adapter.plan(manifest), "remote_inspected": False,
+            "warnings": _listener_warnings(manifest)}
+
 
 def doctor(provider):
     from .providers import get_adapter

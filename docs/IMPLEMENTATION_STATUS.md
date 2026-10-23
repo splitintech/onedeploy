@@ -1,8 +1,14 @@
 # Implementation and qualification status
 
-This document separates implemented engineering, offline evidence, and live qualification. Final offline evidence and explicit qualification limits are recorded in [verification](VERIFICATION.md). A provider CLI command returning zero is not application readiness.
+This document separates implemented engineering, offline evidence, and live qualification. Version-specific offline evidence and explicit qualification limits are recorded in [verification](VERIFICATION.md). A provider CLI command returning zero is not application readiness.
 
-## Plan traceability
+## Current UX increment versus historical plan
+
+The initial engine and manifest workflow were merged into `main`. `Onedeploy.md` contains the documentation-only proposal that preceded implementation; its proposed wording is historical design context, not the current command reference. The experimental U1–U5 increment adds passive project discovery/resolution, optional saved profiles, a JSON-only agent journey and the opt-in `onedeploy tui --wizard --path ...` interface. Plain `tui` and manifest commands remain the fallback.
+
+Use [the importer contract](IMPORTERS.md) and [agent CLI](AGENT_CLI.md) for exact implemented syntax and limits. Recognition is not complete semantic import, and an importer cannot bypass an adapter's narrower capabilities. [The U1–U5 acceptance matrix](UX_ACCEPTANCE.md) separates implementation from passing tests, usability evidence, live qualification and promotion to default. The final source passed 506 offline tests, independent review and rebuilt-wheel relocation checks for all three providers; exact evidence and unrun external gates are recorded in [verification](VERIFICATION.md).
+
+## Historical baseline plan traceability
 
 | Plan area | Implementation/evidence | Qualification boundary |
 | --- | --- | --- |
@@ -29,6 +35,7 @@ This document separates implemented engineering, offline evidence, and live qual
 - Provider resource existence and account identity must be verified. Private ingress is not inferred from a generic manifest flag.
 - Existing Railway volume attachment and Daytona shared read/write mounts are capability-validated. Unsupported read-only/exclusive-writer guarantees and generic Modal mount translation are rejected, not silently ignored. External dependency declarations validate URL/TLS configuration without provisioning or migrations.
 - A project Dockerfile can build a Daytona snapshot and then start a receipt-bound sandbox; this does not prove real model weights, GPU compatibility, cache durability, latency or accuracy.
+- Saved discovery profiles remain absolute, local-source-bound artifacts. A separate non-executable portable intent export/import carries allowlisted reusable configuration without target IDs, runtime values or approval; another checkout/machine still requires fresh discovery, code trust and destination resolution. Passive discovery uses fixed exclusions and a cooperative traversal deadline, not Git ignore evaluation or a subprocess parser sandbox; the later upload core retains its Git ignore checks.
 - Keychain persistence and a local MCP server are optional future integrations, not required to use environment files or the agent-facing CLI. They are not silently provided by the initial implementation.
 - Log snapshots and CLI `--follow` snapshot polling are implemented. Polling suppresses identical consecutive snapshots but is not a lossless event stream; bounded `--max-polls` and Ctrl-C stop it.
 - Recovery must not automatically replay uncertain writes. Cases that cannot be proven from provider evidence remain blocked for operator reconciliation.
@@ -36,7 +43,7 @@ This document separates implemented engineering, offline evidence, and live qual
 
 ## Release evidence
 
-See the [final verification report](VERIFICATION.md) for exact test counts, build/install commands, independent-review findings and unrun checks. Do not infer completion of all plan phases merely from this file or a successful source push.
+See the [version-specific verification report](VERIFICATION.md) for exact test counts, build/install commands, independent-review findings and unrun checks. Do not infer completion of all plan phases merely from this file or a successful source push.
 
 ## Phase-by-phase requirement closure
 

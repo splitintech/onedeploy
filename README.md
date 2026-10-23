@@ -1,35 +1,46 @@
 # onedeploy
-A CLI tool that automates your inference deployments
 
-## Local developer tool
+A local, plan-first deployment tool for humans and agents using supported Railway, Daytona and Modal workflows. No LLM account or hosted Onedeploy service is required.
 
-Onedeploy is a project-agnostic, plan-first CLI with an optional terminal UI for supported Railway, Daytona and Modal workflows. Local agents use the same JSON CLI; no LLM provider is required.
+**Experimental and opt-in.** The new three-step wizard and project-discovery CLI are an experimental increment, not a universal importer or live-provider certification. The manifest workflow remains available. See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [acceptance evidence](docs/UX_ACCEPTANCE.md) for implemented, tested and pending work.
 
-**Experimental / offline-tested.** This source is not a claim of live provider or production qualification. Supported profiles differ by provider; inspect the capability guide before deploying. No provider login, resource creation or package-registry release occurs just by installing the tool.
+## Install from a reviewed checkout
 
-### Fork and run locally
-
-From your reviewed fork/checkout (the initial work is on `feat/onedeploy-initial`):
+The initial engine was merged into `main`; the historical `feat/onedeploy-initial` branch is not the installation path. Use a reviewed checkout containing this increment:
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[tui]'
 onedeploy --help
-onedeploy tui
+onedeploy tui --wizard --path /absolute/path/to/your/project
 ```
 
-Python 3.11+ is required; initial local verification uses Linux/Python 3.12. Provider CLIs/SDKs and existing authentication are separate prerequisites. Use the repository installation above, not an unverified similarly named registry package.
+Python 3.11+ is required. Provider tools and existing authentication are separate prerequisites. Installing Onedeploy does not log in, create credentials or cloud resources, or publish a package. Do not assume a similarly named registry package is this repository.
+
+## Existing project, three steps
+
+1. **Choose provider.** Review supported profiles and check installed tools. Authentication is not assumed from tool availability; provider inspection is a separate explicit action.
+2. **Choose project.** Select a folder or supported configuration file, review passive discovery and resolve required choices. The tool does not demand a handwritten Onedeploy YAML file or overwrite your application.
+3. **Review and deploy.** Review source, destination, operations and risks. A local preview cannot deploy. Explicit read-only provider inspection creates an executable plan; **Deploy this plan** approves the exact reviewed plan without typing a hash.
+
+Recognition is not deployment support. Read the [exact importer mappings and limits](docs/IMPORTERS.md). Provider capabilities, code trust, runtime secrets and application qualification remain explicit.
+
+Agents use `discover → resolve → plan → deploy` with `--json` through the same engine. Reading a plan ID is not authorization to execute it. See the [complete JSON-only journey](docs/AGENT_CLI.md).
+
+The legacy route remains `onedeploy tui --manifest path/to/manifest.yaml` or `onedeploy plan --manifest ...`. New-project templates are optional and separate from importing an existing project.
+
+## Guides
 
 - [Getting started and fork workflow](docs/GETTING_STARTED.md)
+- [Importer mapping, bounds and preservation](docs/IMPORTERS.md)
+- [Profiles, configuration and secrets](docs/CONFIGURATION.md)
+- [Agent CLI and typed outcomes](docs/AGENT_CLI.md)
+- [Portable non-executable intent](docs/PORTABLE_INTENT.md)
 - [Provider contracts and capability limits](docs/provider-contracts.md)
-- [Configuration and secret handling](docs/CONFIGURATION.md)
-- [Agent CLI contract](docs/AGENT_CLI.md)
 - [Recovery and rollback](docs/RECOVERY.md)
-- [Implementation and qualification status](docs/IMPLEMENTATION_STATUS.md)
-- [Original implementation plan](Onedeploy.md)
-- [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+- [Implementation status](docs/IMPLEMENTATION_STATUS.md) · [U1–U5 acceptance matrix](docs/UX_ACCEPTANCE.md) · [Verification](docs/VERIFICATION.md)
+- [Compatibility worksheets](docs/COMPATIBILITY_WORKSHEETS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Version policy](docs/VERSIONING.md)
+- [Design and historical plan](Onedeploy.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Dependency licenses](docs/DEPENDENCY_LICENSES.md)
 
-Generate and review a plan before an explicit deploy. Plan IDs bind intent, not proof of human authorization. Do not put credentials in arguments, source or plans, and do not automatically retry an uncertain write.
-
-Additional references: [field reference](docs/CONFIGURATION.md), [compatibility worksheets](docs/COMPATIBILITY_WORKSHEETS.md), [troubleshooting](docs/TROUBLESHOOTING.md), [version and migration policy](docs/VERSIONING.md), and [dependency license review](docs/DEPENDENCY_LICENSES.md).
+Never put credentials in flags, source, discovery answers or plans. Review executable build/application code before use. A timeout may hide an accepted cloud operation: inspect and reconcile, never blindly retry a write.

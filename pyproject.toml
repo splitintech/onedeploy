@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "onedeploy"
-version = "0.1.0"
+version = "0.2.0a1"
 description = "Local, plan-first deployment tooling for Railway, Daytona and Modal"
 readme = "docs/GETTING_STARTED.md"
 requires-python = ">=3.11"

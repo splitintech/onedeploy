@@ -299,3 +299,20 @@ async def test_diagnostic_controls_use_shared_engine(monkeypatch, action):
         assert len(calls) == 1
         assert app.plan is None
         if action == "logs": assert calls[0][1]["follow"] is False
+
+
+@pytest.mark.asyncio
+async def test_empty_resolution_outcome_is_blocked_before_engine(monkeypatch):
+    from textual.widgets import Checkbox, Select
+    calls=[]
+    monkeypatch.setattr(core,'resume',lambda *a,**kw:calls.append(kw))
+    app=DeploymentApp()
+    async with app.run_test(size=(100,60)) as pilot:
+        await pilot.pause()
+        app.query_one('#resolution-consent',Checkbox).value=True
+        app.query_one('#observation',Input).value='fresh-observation'
+        assert app.query_one('#outcome',Select).value is Select.NULL
+        await app.on_button_pressed(Button.Pressed(app.query_one('#resolve',Button)))
+        await pilot.pause()
+        assert calls==[]
+        assert not app.busy

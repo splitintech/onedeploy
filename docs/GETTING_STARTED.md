@@ -6,12 +6,12 @@ A local, project-agnostic deployment CLI and optional terminal UI for Railway, D
 
 ## Fork and install locally
 
-Fork `splitintech/onedeploy` on GitHub, then clone your fork. The initial implementation lives on `feat/onedeploy-initial` until maintainers decide to merge it. Include that branch when creating your fork (do not copy only `main`); otherwise fetch the reviewed feature branch from the upstream repository before switching to it.
+Fork `splitintech/onedeploy` on GitHub, then clone your fork. The initial implementation is merged into `main`. Use a reviewed checkout containing the experimental UX increment; source publication and package publication are separate. The historical `feat/onedeploy-initial` branch is not required.
 
 ```sh
 git clone https://github.com/YOUR_ACCOUNT/onedeploy.git
 cd onedeploy
-git switch feat/onedeploy-initial
+git switch main
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[tui]'
@@ -22,7 +22,30 @@ Use Python 3.11 or newer. The core is portable Python; filesystem protection and
 
 No package-registry release is implied. Do not assume an identically named package on a public registry is this repository; use a reviewed checkout or built wheel from this source.
 
-## First plan
+## Existing project: experimental three-step wizard
+
+```sh
+onedeploy tui --wizard --path /absolute/path/to/your/project
+```
+
+`--wizard` is the opt-in. Plain `onedeploy tui` retains the manifest interface during this experimental release. Discovery does not require a provider login, network access or a handwritten Onedeploy YAML file. A recognized file may still contain unsupported behavior; check [the importer matrix](IMPORTERS.md) before expecting deployment support.
+
+1. **Choose provider.** Select Railway, Daytona or Modal. Check installed tools separately from authentication. Official setup guidance is available, but the wizard does not install tools, log in or create/store provider credentials. Existing Railway project/environment/service IDs, Daytona organization/sandbox settings and Modal workspace/environment/app settings are not interchangeable.
+2. **Choose project.** Enter a project directory or supported file path. Review discovered candidates and choose the intended input/service. Choose the supported runtime profile explicitly when it is inferred, supply missing nonsecret answers, review code trust and select a private env file or use masked runtime input. **Add runtime variable references** lets you declare names, environment sources, types and requirements without putting values in the profile. Compose dependency/storage requirements are expanded into labeled fields, not a request to handwrite YAML. Incomplete or unsupported mappings stop before planning; switching providers requires new target choices. Discovery and resolution preserve original application files.
+3. **Review and deploy.** Make a local preview first or explicitly enable read-only remote inspection using your existing authentication. Review source, exact target, changes, variable recipients, storage/ingress/lifecycle implications, cost uncertainty and verification limits. A local preview cannot execute. The deliberate **Deploy this plan** action binds the reviewed immutable plan without asking you to copy a plan ID. Changes require a new review.
+
+Status and bounded log snapshots are available after execution. Advanced/recovery controls retain access to interrupted or uncertain operations. Cancelling local work does not promise remote rollback, deletion or a spending cap. Do not retry a deployment until its outcome is established.
+
+Optional profiles can save a resolution for reuse; they are not mandatory application files and are not credentials. In Step 2, enter a saved profile JSON path and use **Load saved profile from this path** or **Discover project**. The current provider and source binding must match; source trust resets and you resolve again before reviewing a fresh plan. Keep profiles private, outside the source bundle or in excluded `.onedeploy`. These local profiles bind absolute paths. For another checkout/machine, [export a separate non-executable intent](PORTABLE_INTENT.md) and resolve it against freshly discovered source and newly confirmed destinations, rather than editing hashes. See [profile storage, portability and invalidation](CONFIGURATION.md#discovery-and-optional-profiles).
+
+No importer converts an arbitrary application into every provider's packaging. For example, a Dockerfile does not become a Modal ASGI app automatically. No hidden database provisioning, migrations, application sends, public exposure, login or billing commitments are added to the three steps.
+
+See [acceptance evidence](UX_ACCEPTANCE.md) for automated versus unrun human/platform checks. The wizard remains experimental until its promotion gates are met.
+
+## Manifest fallback and optional new-project templates
+
+Use this route for an existing Onedeploy manifest or when deliberately creating a new sample. `init` creates new local files; it is not an import of your application.
+
 
 ```sh
 onedeploy init --template docker-http
@@ -58,17 +81,17 @@ onedeploy deploy --plan plan.json --approve-plan PLAN_ID --env-file .env --json
 
 This is a real mutating operation when authorized and configured, not a simulation. It may incur charges and transmit selected runtime variables to the chosen provider. Do not run it until you intend that exact deployment. A timeout may leave a running remote operation; inspect and reconcile rather than repeatedly executing deploy.
 
-## Terminal interface
+## Legacy terminal interface
 
 ```sh
-onedeploy tui
+onedeploy tui --manifest path/to/onedeploy.yaml
 ```
 
-The TUI can load a provider-specific manifest or guide creation of a fresh generic project with provider/profile and exact target fields. Changing provider clears incompatible IDs and approval rather than reusing them. Prerequisite diagnosis, typed variable entry, saved plan review, logs and recovery use the same engine. Secret input is masked. Long operations run off the UI thread. Cancelling local progress does not guarantee that a provider rolled back or stopped charging; follow the resulting journal state.
+The fallback remains available, including guided creation of a fresh generic project, typed masked runtime input, prerequisite diagnosis, saved plans, logs and recovery. This legacy review screen uses its existing plan-ID confirmation; the opt-in wizard uses **Deploy this plan** instead. Both call the same planning/execution engine. Do not confuse template creation with importing an existing application.
 
 ## Agents and automation
 
-Use `--json` and explicit paths. Parse the versioned result envelope and exit code instead of scraping terminal messages. stdout is machine output; stderr is for diagnostics. Never construct shell strings by interpolating user variables. Do not capture `.env` contents in agent conversations or logs.
+Follow the [JSON-only discovery-to-execution journey](AGENT_CLI.md) for an existing project without authoring a manifest. Use `--json` and explicit paths. Parse the versioned result envelope and exit code instead of scraping terminal messages. stdout is machine output; stderr is for diagnostics. Never construct shell strings by interpolating user variables. Do not capture `.env` contents in agent conversations or logs.
 
 ```sh
 onedeploy schema --json
