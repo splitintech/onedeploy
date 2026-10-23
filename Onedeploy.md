@@ -1,6 +1,8 @@
 # Onedeploy: implementation plan
 
-Status: **plan only**. No implementation, package release, cloud deployment, account login, credential setup, migration, or live application action is represented by this document.
+Status: **proposed UX and agent-orchestration revision, 2026-10-23; documentation only**. The initial manifest-first engine, CLI, TUI and provider adapters were merged at `37f023d70e87d61d51cf9591817adbef8383b71f`. This revision plans the next increment; it does not claim discovery/import or the new three-step UI is implemented. It authorizes no implementation, merge, package release, account login, credential setup, cloud deployment, migration or application action.
+
+Current implementation evidence and limitations remain in [implementation status](docs/IMPLEMENTATION_STATUS.md), [verification](docs/VERIFICATION.md), and [agent CLI](docs/AGENT_CLI.md). The engine is offline-tested, not live-provider or application qualification. Historical phases below retain their requirements; the new delivery work is phased separately in section 11.
 
 ## 1. Product goal
 
@@ -8,7 +10,7 @@ Onedeploy is a standalone, open-source developer tool that users can fork, insta
 
 The tool is project-agnostic. It does not depend on SplitIn application code, accounts, infrastructure, credentials, or an LLM provider. OSM Map Studio, Voice, and Slybroadcast are initial compatibility case studies, not dependencies or hardcoded product modes.
 
-**Promise:** one workflow for supported deployment profiles, with explicit provider differences.
+**Promise:** one CLI/orchestrator for humans and agents across supported provider profiles. Developers should not have to learn three provider command syntaxes or handwrite a mandatory Onedeploy YAML file. Provider-specific packaging, accounts and capabilities remain explicit.
 
 **Not a promise:** every arbitrary application can run unchanged on every provider. Onedeploy must identify unsupported combinations before making changes and explain the missing packaging or capability.
 
@@ -53,42 +55,47 @@ Produce a compatibility worksheet for each target service/profile: source revisi
 
 ## 3. User experience
 
-### Local developer workflow
+### Current versus proposed
 
-1. Fork or clone the public repository and install the tool in an isolated environment.
-2. Run `onedeploy init` to select a generic template and create a manifest plus placeholder `.env.example`.
-3. Put local configuration in a private `.env` file or use existing environment/secret-manager references.
-4. Run `onedeploy tui` for guided setup, or use the same engine through CLI commands.
-5. Select a provider, account context, project/environment and explicit existing or new resource.
-6. Validate packaging, required variables, capabilities and prerequisites.
-7. Review a saved deployment plan showing exact source/artifact, destination, resources, ingress, secret destinations and expected changes.
-8. Approve that exact plan and deploy. Watch structured progress and verification.
-9. Receive a nonsecret result summary and instructions for any protected connection output.
-10. Inspect status/logs, resume a reconciled interrupted operation, or explicitly plan rollback.
+**Current:** the CLI/TUI loads an Onedeploy-schema manifest (the filename is flexible), resolves declared variables and invokes a shared planning/execution engine. `init` creates a generic starter, not an import of an existing application. Existing Compose, Kubernetes or application YAML cannot simply be renamed or passed as an Onedeploy manifest. The current human approval UI requires typing a plan ID.
 
-A user can run one command or an optional generated thin launcher for a service. The implementation remains one shared package, not many duplicated deployment scripts.
+**Proposed:** the primary journey is three screens below. Configuration normalization becomes an internal engine concern, with optional saved profiles for reuse. Existing manifest-based automation remains compatible. A new-project template flow stays secondary and must not be confused with importing an existing application.
 
-### Agent workflow
+### Three-step local developer workflow
 
-Agents use the same commands with `--json` and no interactive prompts. There is no built-in LLM requirement and no privileged “agent bypass.”
+Install the tool in an isolated environment, then launch `onedeploy tui`. The proposed UI presents:
 
-Illustrative command contract, to be finalized and versioned during implementation:
+1. **Choose provider.** Choose Railway, Daytona or Modal. Show supported profiles and installed-tool/authentication status separately. Offer official setup guidance when prerequisites or login are missing; do not silently install tools, create tokens, store credentials or log in. Offline exploration remains possible. Explicit authenticated read-only inspection may list permitted destinations; the user confirms the exact account/workspace/organization, environment and existing/new resource. Never infer authorization from a remembered default.
+2. **Choose project.** Enter a local project folder or supported configuration-file path. Passively discover supported inputs, show recognized settings with provenance, select a service/build context when ambiguous, and ask only for missing or conflicting values and runtime variables. Select an optional private `.env` explicitly; it is not the deployment specification. Preview reuse/mapping limitations and source trust requirements. Do not overwrite the existing project or demand a handwritten `onedeploy.yaml`.
+3. **Review and deploy.** Show the exact source/artifact, provider identity and destination, changes, secret recipients, storage/ingress/lifecycle implications, cost uncertainty and verification limits. Distinguish a local non-executable preview from a remotely inspected executable plan. A deliberate **Deploy this plan** action binds approval to the displayed immutable plan; humans need not copy/type a plan hash. Any material edit or changed source/remote precondition clears approval and requires review again. Show progress and layered results, not a fabricated all-green success.
+
+Three steps means three conceptual screens, not an unconditional one-click deployment. Missing packaging, account access or incompatible capabilities must stop with actionable guidance. No automatic migrations, database creation, message sends, public exposure or billing commitments are hidden in the flow.
+
+Status and logs are available after execution. Resume, rollback, operator assertions and low-level IDs live behind an **Advanced / recovery** area, surfaced automatically when an interrupted/uncertain outcome needs attention. Hiding controls must not hide risk or delete recovery evidence. Back/cancel clears stale approval; repeated clicks cannot submit duplicate operations. Keyboard navigation, narrow terminals, focus, error summaries and resize behavior are acceptance requirements.
+
+### Agent workflow and parity
+
+Agents invoke one stable Onedeploy CLI with `--json`, never three independently invented provider command sequences. No built-in LLM, agent-specific account or privileged bypass is required. Both interfaces call the same discovery, normalization, validation, planning, execution and recovery APIs.
+
+**Existing commands:** `init`, `config validate`, `inspect`, `plan`, `deploy`, `status`, `logs`, `doctor`, `resume`, `rollback`, `schema`, `tui`. Existing `inspect` is manifest-oriented; it is not automatic project discovery. Existing `plan --inspect-remote` opts into provider reads. Keep the existing manifest route backward-compatible.
+
+**Proposed command surface, not commands available today:**
 
 ```text
-onedeploy init --template docker-http
-onedeploy config validate --manifest onedeploy.yaml --env-file .env --json
-onedeploy inspect --manifest onedeploy.yaml --json
-onedeploy plan --manifest onedeploy.yaml --env-file .env --out plan.json --json
-onedeploy deploy --plan plan.json --approve-plan <plan-id> --env-file .env --json
+onedeploy discover --provider railway --path ./my-project --out discovery.json --json
+onedeploy resolve --discovery discovery.json --answers answers.json --out profile.json --json
+onedeploy plan --profile profile.json --env-file /private/app.env --out preview.json --json
+onedeploy plan --profile profile.json --env-file /private/app.env --inspect-remote --out plan.json --json
+onedeploy deploy --plan plan.json --approve-plan <plan-id> --env-file /private/app.env --json
 onedeploy status --deployment <deployment-id> --json
 onedeploy logs --deployment <deployment-id> --follow --json
 onedeploy resume --deployment <deployment-id> --plan-out recovery-plan.json --json
-onedeploy rollback --deployment <deployment-id> --to <release-id> --plan-out rollback-plan.json --json
-onedeploy doctor --provider railway --json
-onedeploy schema --json
+onedeploy rollback --deployment <deployment-id> --to <compatible-release> --plan-out rollback-plan.json --json
 ```
 
-`resume` and `rollback` initially inspect and produce a new plan; execution goes through the same approval boundary. No command should turn an ambiguous previous operation into an automatic retry.
+Discovery returns versioned candidate/config provenance, recognized mappings, missing fields, conflicts, unsupported capabilities and recommended next actions. Resolve accepts typed nonsecret answers and secret references, never secret values in flags or answer files. Noninteractive commands return structured `input_required`, `conflict`, `unsupported_capability` or `approval_required` outcomes rather than hanging on prompts. Final command names, envelopes, exit codes and migrations must be frozen in the next contract version before implementation ships.
+
+An agent can discover, resolve, plan, request approval through its host's trusted policy, execute the exact approved plan, then observe status/logs and reconcile. Knowing a plan ID is not authorization. A UI click or machine approval record binds intent, not proof of an external agent's user permission. Do not introduce a global `--yes` bypass or let an agent mint its own authorization by reading a plan. Recovery never turns uncertainty into a blind retry; a separately approved recovery plan is required where safe execution is possible.
 
 ## 4. Package architecture
 
@@ -97,7 +104,7 @@ onedeploy schema --json
 - Python 3.11+ core, chosen to work naturally with provider SDK ecosystems and local automation.
 - Textual for the full terminal UI, layered over the public engine API.
 - A typed CLI framework and validated models, selected and pinned after dependency compatibility testing.
-- Declarative YAML manifests with a strict schema; JSON input/output for agents.
+- Versioned normalized configuration with a strict schema; optional declarative saved profiles/manifests and JSON input/output for agents. Discovery/importers feed the same model without mandatory user-authored YAML.
 - Provider SDKs or official CLIs behind adapters, selected per operation rather than assuming one universal transport.
 - Optional keychain integration. No automatic credential storage.
 
@@ -120,7 +127,7 @@ examples/
 
 ### Separation of concerns
 
-1. **Manifest:** what the application requires and which artifacts to run.
+1. **Discovery/importers and normalized configuration:** passive evidence collection and explicit resolution of what the application requires and which artifacts to run; an optional manifest/profile serializes that model.
 2. **Provider adapter:** what the selected platform can do and how to perform a supported operation.
 3. **Planner:** resolves inputs and capabilities into an immutable, inspectable change set.
 4. **Executor:** executes only that approved change set with bounded subprocess/SDK behavior.
@@ -128,9 +135,9 @@ examples/
 6. **Journal/reconciler:** records intent and observations, then resolves uncertain outcomes against actual provider state.
 7. **CLI/TUI:** alternative interfaces to the same engine and policy, never separate implementations.
 
-## 5. Manifest and configuration contract
+## 5. Discovery, import and configuration contract
 
-A manifest describes:
+The normalized model, whether derived from supported inputs or loaded from an explicit profile, describes:
 
 - Schema version and application name.
 - Runtime profile: container HTTP, ASGI HTTP, bounded worker, or model service.
@@ -145,6 +152,32 @@ A manifest describes:
 Parse YAML with a safe loader that rejects duplicate keys, unsafe/custom tags and unexpected schema fields. Reject excessive nesting or oversized inputs before validation.
 
 Application build and startup commands are executable code supplied by the user. Onedeploy must disclose this trust boundary, restrict arbitrary hooks by default, and never imply manifests from unknown repositories are safe merely because they validate structurally.
+
+### Proposed importer scope and support matrix
+
+Support is versioned per importer **and** provider/profile. These are planned capabilities, not claims of current import support. A recognized file is not automatically deployable.
+
+| Input | Planned initial handling | Explicit limits / unsupported cases |
+| --- | --- | --- |
+| Existing Onedeploy-schema YAML | Load directly using strict validation; preserve manifest-based CLI compatibility | Arbitrary YAML is not this schema; unknown fields fail |
+| Project folder with Dockerfile | Select explicit context/Dockerfile; reference original build instructions for supported Railway/Daytona profiles | No build during discovery; no automatic mapping to Modal; dynamic build results and external dependencies are unresolved |
+| `compose.yaml` / `docker-compose.yml` | Read supported static fields for one explicitly selected build-backed service: context/Dockerfile, declared variable names, ports as candidates, dependencies/storage as requirements | No automatic multi-service orchestration, databases, privileged/host networking, devices, arbitrary interpolation, include/extends execution, image-only transport or silent dropping of unsupported fields |
+| Railway `railway.toml` / `railway.json` | Import an explicitly documented/tested subset of static build/deploy settings for an existing target | Commands, builder differences, resource defaults and destinations are never assumed equivalent; unmapped behavior blocks or needs explicit resolution |
+| Modal Python deployment entrypoint | Recognize file and statically inspect supported literal app/function declarations; retain reviewed original entrypoint | Never import/execute Python during discovery; dynamic definitions, imports or computed configuration require explicit answers or unsupported guidance; later deployment requires code trust |
+| Daytona-related project files | Reuse recognized Dockerfile or explicitly supported immutable snapshot references plus user-resolved sandbox/resource settings | No claim of a universal Daytona YAML format; arbitrary scripts are not executed or translated |
+| Kubernetes/Helm, CI workflows, arbitrary app YAML or unknown files | Identify format where possible and explain supported alternatives | No first-increment semantic importer; do not run Helm, workflows or infer their deployment authority |
+
+Each importer publishes accepted versions and exact field mappings, preservation rules, tests and rejected cases. A provider destination, persistence requirement or secret cannot be safely guessed from a filename. Conflicting explicit sources block resolution; inferred defaults remain labeled suggestions until selected. Do not silently choose the first service or discard a mount, dependency, authentication requirement or lifecycle setting.
+
+Discovery is local and passive: no provider calls, builds, package installation, shell execution, Python imports, command substitution, network schema loading or arbitrary config hooks. Bound directory traversal, size, nesting, file counts and parse time; reject unsafe tags/duplicate keys and path escapes/symlink surprises. Limit reads to the selected scope, do not crawl home directories or ancestors, and respect secret exclusions. Existing config may embed secrets: never echo raw values; redact diagnostics and return only selected references/names. Unknown unsupported constructs are data, not instructions to execute.
+
+For every normalized field record source path, location/key where available, importer/version, source digest, mapping/transformation, whether explicit/inferred/user-resolved, and unresolved ambiguity. No raw secret values in provenance. Bind the selected inputs and source inventory to discovery/resolve artifacts; changes invalidate affected resolution and subsequent approval. Source execution trust is separate from syntax validation.
+
+### Optional saved profile and source preservation
+
+Users may keep resolved configuration in memory for one run, save a private local profile, or explicitly export a reviewable portable profile with secret references. No mandatory `onedeploy.yaml` is written into the application. Persist local journals and necessary recovery artifacts privately even when the user declines profile export. Define profile location, schema version, path base/portability, provider-specific target scope and migration policy explicitly; never save tokens or runtime secret values. Optional exports must exclude machine-specific credentials and warn about operational identifiers.
+
+Keep original application YAML, Dockerfiles and Python files byte-for-byte unchanged during discovery/normalization. Generated packaging is a separate, explicit opt-in with a preview of new files/diffs, never an automatic overwrite or purported semantic conversion. Reuse original instructions where supported; preserve original runtime behavior rather than applying guessed defaults. Switching provider invalidates incompatible target/resource mappings and approval; it does not transplant credentials or imply runtime parity.
 
 ### `.env` handling
 
@@ -176,13 +209,19 @@ Treat deployment as sandbox/image/snapshot lifecycle, not an always-on web-servi
 
 Treat deployment as an application/function runtime with explicit entrypoint, image, secrets, concurrency, startup and scale-down behavior. ASGI and model-service templates require provider-specific packaging. Persistent model data and cold starts need explicit design. No inference that an arbitrary Docker daemon, long-lived worker or filesystem layout maps directly to Modal.
 
+### Current transport and documentation contracts
+
+The merged implementation uses **Railway official CLI**, **Daytona Python SDK through an isolated bridge**, and **Modal official CLI plus trusted application Python code using the Modal SDK**. Onedeploy is the common gateway, not a claim that all providers expose the same CLI or API. Users/agents operate Onedeploy; adapters own command construction, response parsing and provider-specific semantics.
+
+Maintain reviewed versioned adapter contracts, capability matrices, official documentation links, tested CLI/SDK versions and response fixtures. Check installed versions before execution and fail clearly outside supported compatibility. Documentation changes inform maintainers and reviewed adapter updates, not runtime command generation. Never scrape a webpage and execute arbitrary suggested commands, install plugins from config URLs, or allow an LLM to invent provider flags. Offline contract tests and authorized staging evidence remain distinct. Provider authentication stays under the operator's control and separate from application `.env` values.
+
 ### Support levels
 
 Use separate labels: `unsupported`, `experimental/offline-tested`, `staging-qualified`, and `production-qualified-by-operator`. Package release status must not imply a user's application has been production-qualified. Verify official APIs/CLI flags and pin/test compatibility versions before shipping each adapter.
 
 ## 7. Plans, approval and recovery
 
-A plan binds the schema version, adapter version, source revision/digest, target account/project/environment/resource, config structure, secret references, resources, costs/exposure notes, operations and verification steps. Canonical serialization produces a plan ID. Any material target or operation change invalidates approval.
+A plan binds the schema version, importer/normalizer and adapter versions, input provenance/resolution digest, source revision/digest, target account/project/environment/resource, config structure, secret references, resources, costs/exposure notes, operations and verification steps. Canonical serialization produces a plan ID. Any material target or operation change invalidates approval.
 
 `--approve-plan` binds execution intent to the exact plan; knowing or supplying its ID is not proof of human approval or a security authorization. A machine caller needs an explicitly configured execution policy or a trusted approval boundary outside the agent's own assertion. An agent must not treat its ability to read a plan ID as permission to approve itself. The local CLI cannot enforce every external agent platform's permission policy; integrations must preserve that policy and document who can authorize execution.
 
@@ -233,9 +272,11 @@ Publish independently written examples with placeholder values only:
 3. Bounded worker, available only on qualified provider profiles.
 4. CPU model service illustrating cache, warmup, concurrency and dependencies.
 
-Templates document prerequisites rather than creating external databases, identities or secret accounts automatically. Example application behavior must be harmless and runnable offline. Service-specific launchers merely pass a manifest path to the shared CLI.
+Templates document prerequisites rather than creating external databases, identities or secret accounts automatically. Example application behavior must be harmless and runnable offline. Templates remain a secondary new-project option; an existing-project import must never substitute the sample for the user's application. Thin launchers pass a supported project/config/profile input to the shared CLI rather than duplicate provider logic.
 
 ## 11. Implementation phases and acceptance gates
+
+Phases 0–6 below are the historical baseline requirements, not a claim that this UX revision is already built. Consult the linked implementation-status records for completed engineering and outstanding qualification. New discovery/UX work follows phases U1–U5 after baseline preservation.
 
 ### Phase 0: compatibility and contract design
 
@@ -265,7 +306,7 @@ Add Railway container HTTP and Modal ASGI profiles, each with its own packaging,
 
 Build guided service/provider selection, typed variable prompts, masked secret entry, prerequisite diagnosis, plan review, progress, cancellation and recovery screens on the same engine. Include accessible keyboard navigation and narrow-terminal behavior.
 
-**Gate:** interactive and machine flows produce equivalent plans. Back/cancel/retry do not create duplicate operations, leak values or reset approval state.
+**Gate:** interactive and machine flows produce equivalent plans. Back/cancel/retry do not create duplicate operations, leak values or bypass approval; back/cancel and material edits clear stale approval without erasing journal or recovery evidence.
 
 ### Phase 5: integration and resilience
 
@@ -279,8 +320,40 @@ Complete installation/fork instructions, contribution/security policies, example
 
 **Gate:** clean local install, package build and offline CI pass on the supported Python/platform matrix; artifact and secret scans pass; repository branch reviewed. Package registry publication and production deployment are separate actions, not implied by a source push.
 
+### Next increment U1: contracts and safe discovery
+
+Freeze versioned discovery/resolution/profile/result schemas, typed missing/conflict outcomes, importer field matrix and preservation/trust policy. Implement passive discovery against independent synthetic fixtures, with manifest compatibility retained.
+
+**Gate:** supported and unsupported cases are explicit; discovery performs zero execution/provider/network calls; secrets never appear in evidence/errors; unsafe paths/tags/inputs are rejected; original source hashes are unchanged.
+
+### U2: normalization and agent parity
+
+Implement deterministic resolution, provenance, optional profile persistence/export, source-change invalidation and CLI discovery-to-approved-execution contracts through the existing engine. Start with native manifests and Dockerfile paths; add only individually tested supported importer subsets from the matrix. Do not advertise an importer before its mappings and rejection tests pass.
+
+**Gate:** CLI can complete every proposed UI operation noninteractively with JSON; ambiguous services/targets/conflicts stop with typed questions; unsupported mappings cannot be ignored; same resolved inputs yield equivalent plans; secret references remain separate from values.
+
+### U3: three-step human interface
+
+Replace manifest-first onboarding with provider → project/config → review/deploy. Keep optional template creation and manifest loading, move low-level recovery to Advanced, and replace manual plan-ID copying with deliberate approval bound to the reviewed immutable plan. Make prerequisite/authentication guidance helpful without auto-login or credential persistence.
+
+**Gate:** users can preview an existing supported project without hand-authoring Onedeploy YAML; screen reader/keyboard/narrow-terminal paths, back/edit, provider switching, cancellation and repeated clicks are tested. No stale approval or duplicate execution; recovery is discoverable when needed.
+
+### U4: integration, regression and qualification
+
+Exercise importer-to-adapter plans for each supported provider/profile, malicious/ambiguous inputs, changed source/credentials/preconditions, failed builds/probes and uncertain writes. Preserve the existing manifest command contract and truthful rollback/reconciliation behavior.
+
+**Gate:** independent review, importer coverage matrix, CLI/TUI plan parity and existing offline suite pass; supported OS coverage is recorded, not inferred. OSM/CPU Voice/Slybroadcast may supply sanitized architectural worksheets only; source readiness is not a live-qualified integration. Real application testing remains separately authorized.
+
+### U5: staged release and documentation
+
+Ship the new UX initially as an explicitly experimental opt-in while retaining the current manifest workflow. Publish discovery/importer examples, migration/export guidance, agent schemas and provider prerequisite/version contracts. Promote to the default only after U1–U4 gates and representative usability tasks pass; retain a documented fallback and backwards-compatibility window.
+
+**Gate:** a new user and a JSON-only agent independently complete provider choice, existing-project discovery, conflict resolution, review and simulated approved execution with no handwritten mandatory YAML. Record unsupported cases and all unrun live/OS checks. Source publication, merge, package release and real deployment remain separate authorization boundaries.
+
 ## 12. Test strategy
 
+- Discovery/import: supported format/version fixtures, exact provenance, conflicting services/settings, unsupported semantics, dynamic Python without execution, secret-bearing inputs, profile round trips and unchanged original file hashes.
+- UX/agent parity: three-screen and JSON-only flows produce equivalent resolved configuration and plans; changed source, provider or answers invalidate approval; no manual human plan-ID requirement; no implicit agent authorization.
 - Unit: dotenv grammar, duplicate/ambiguous values, conditional variables, schema validation, capability resolution, canonical plan identity and redaction.
 - Security: injection-shaped values, malicious paths/symlinks, oversized provider output, credential-bearing URLs, accidental environment forwarding and logs/tracebacks containing synthetic secrets.
 - Contract: official CLI argv/SDK models and representative response parsing for pinned supported versions.
@@ -296,13 +369,13 @@ CI must not require provider credentials, contact real deployments, publish pack
 
 Required documentation: README, installation and fork workflow, quickstart, manifest/schema reference, dotenv/security contract, provider capability matrix, agent CLI guide, recovery/rollback guide, troubleshooting, testing/qualification records, contribution guide and supported-version policy.
 
-The first useful release is complete when a developer can install locally, configure a generic supported service, generate and understand an immutable plan, explicitly execute through an implemented adapter, inspect a truthful result, and safely recover an uncertain operation. The same flow must work through JSON CLI without an LLM or TUI.
+The baseline first useful release is complete when a developer can install locally, configure a generic supported service, generate and understand an immutable plan, explicitly execute through an implemented adapter, inspect a truthful result, and safely recover an uncertain operation. The same flow must work through JSON CLI without an LLM or TUI.
 
 Deployment completion is layered: artifact built, provider accepted, process running, readiness passed, ingress/auth verified, and application qualified. Report each separately. A green health probe is not proof of production readiness.
 
 ## 14. Immediate next step
 
-Publish **this plan only** to the requested new repository branch. Do not start implementation or deployments as part of the plan publication. After the plan is accepted or implementation is explicitly resumed, begin Phase 0 and Phase 1 and publish evidence with each completed phase.
+Publish this **documentation-only revision of the existing plan** on a feature branch and open a draft review PR. Do not implement, merge or deploy as part of this revision. After implementation is explicitly authorized, begin U1 with existing runtime behavior preserved and report evidence against U1–U5 gates. This replaces the original plan-publication next step; it does not reset the already merged baseline.
 
 
 ## 15. Official architecture references
