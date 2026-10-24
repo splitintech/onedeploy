@@ -55,6 +55,8 @@ class BaseAdapter:
     profiles = set()
 
     def validate(self, manifest):
+        if self.name != 'daytona' and 'transport' in manifest.get('target', {}):
+            fail('Explicit transport selection is supported only by Daytona','invalid_config')
         if manifest.get('provider') != self.name:
             fail('Provider does not match adapter', 'invalid_config')
         if manifest.get('profile') not in self.profiles:
@@ -72,7 +74,7 @@ class BaseAdapter:
         if manifest.get('storage') and self.name not in {'daytona','railway'}:
             fail('Managed storage changes are not implemented')
         for key in manifest.get('variables', {}):
-            if key.startswith(RESERVED) or key in {'PATH','HOME','SHELL','BASH_ENV','ENV'}:
+            if key.startswith(RESERVED) or key in {'PATH','HOME','SHELL','BASH_ENV','ENV','XDG_CONFIG_HOME','APPDATA'}:
                 fail('Application variables cannot override control-plane/process configuration', 'invalid_config')
         if manifest.get('ingress', {}).get('mode', 'existing') not in {'private','existing'}:
             fail('Ingress changes are not implemented')
@@ -99,7 +101,7 @@ class BaseAdapter:
         return {'railway':'5.71.0','modal':'1.6.2','daytona':'0.226.0'}[self.name]
 
     def version_command(self):
-        if self.name == 'daytona':
+        if self.name == 'daytona' and self.version == '2-sdk':
             argv = [sys.executable,'-I',str(Path(__file__).with_name('daytona_bridge.py').resolve()),'version','{}']
         else:
             argv = [self.name,'--version']
@@ -507,9 +509,14 @@ class ModalAdapter(BaseAdapter):
         return [step('rollback',['modal','app','rollback',t['app'],release,'--env',t['environment']],True)]
 
 
-class DaytonaAdapter(BaseAdapter):
+class DaytonaSDKAdapter(BaseAdapter):
+    version = '2-sdk'
+
+    @property
+    def capabilities(self):
+        return {**super().capabilities,'transport':'sdk','authentication':'explicit DAYTONA_API_KEY; does not reuse CLI login'}
     name = 'daytona'
-    target_fields = {'account','sandbox','snapshot','region','mode'}
+    target_fields = {'account','sandbox','snapshot','region','mode','transport'}
     required_fields = {'account','sandbox'}
     profiles = {'docker-http','asgi','model'}
 
@@ -641,7 +648,7 @@ class DaytonaAdapter(BaseAdapter):
     def assert_target(self, manifest, identity, inspection):
         t = manifest['target']
         if identity.get('account') != t['account']:
-            fail('Daytona API key organization does not match target','authentication_failed')
+            fail('Daytona authenticated organization does not match target','authentication_failed')
         if inspection.get('exists') is False:
             if t.get('mode') != 'create' or not (inspection.get('snapshot_id') or (manifest.get('build') and inspection.get('snapshot_pending'))):
                 fail('Daytona target/snapshot was not verified','stale_plan')
@@ -654,3 +661,74 @@ class DaytonaAdapter(BaseAdapter):
         elif t.get('mode') == 'create':
             fail('Daytona sandbox already exists; reconcile instead of creating again','stale_plan')
         return {'identity':identity,'inspection':inspection}
+
+
+class DaytonaAdapter(DaytonaSDKAdapter):
+    """Default transport: official installed CLI, never SDK authentication fallback."""
+    version = '2-cli'
+
+    @property
+    def capabilities(self):
+        result = super().capabilities
+        result.update({'transport':'cli','authentication':'existing CLI browser session in the same OS user/config context',
+                       'logs':False, 'secret_delivery':'unsupported: secret declarations require explicit SDK; explicitly public values use CLI argv',
+                       'runtime_variable_injection':'explicitly nonsecret variables only (process-visible argv)','authenticated_application_checks':False,
+                       'unsupported':['entrypoint logs','secret runtime variable injection','authenticated application probes','API-key-only CLI identity']})
+        return result
+
+    def validate(self, manifest):
+        super().validate(manifest)
+        if manifest.get('target',{}).get('transport','cli') != 'cli':
+            fail('CLI adapter cannot use an SDK-selected manifest','invalid_config')
+        if any(spec.get('secret',True) is not False for spec in manifest.get('variables',{}).values()):
+            fail('Daytona CLI has no secret-safe runtime-variable input. Select target.transport: sdk explicitly for runtime injection, or remove variable declarations only if the application genuinely does not need them.')
+        if any(c.get('auth_variable') for c in manifest.get('checks',[])):
+            fail('Daytona CLI cannot securely inject authenticated probe credentials. Select target.transport: sdk explicitly.')
+        return []
+
+    def _step(self, manifest, operation, mutating=False):
+        if operation == 'logs':
+            fail('Daytona CLI has no entrypoint logs command; no SDK fallback is performed. Use the provider dashboard or an explicitly selected SDK workflow.')
+        operation_step = super()._step(manifest,operation,mutating)
+        operation_step['argv'][2] = str(Path(__file__).with_name('daytona_cli_bridge.py').resolve())
+        operation_step['env_keys'] = []
+        if operation != 'create':
+            operation_step.pop('stdin_env_keys',None)
+            operation_step.pop('stdin_format',None)
+        config = json.loads(operation_step['argv'][-1])
+        config['public_variable_names'] = sorted(manifest.get('variables',{})) if operation == 'create' else []
+        operation_step['argv'][-1] = json.dumps(config,sort_keys=True,separators=(',',':'))
+        return operation_step
+
+    def assert_target(self, manifest, identity, inspection):
+        if identity.get('account') != manifest['target']['account']:
+            fail('Daytona CLI active organization does not match the explicit target','authentication_failed')
+        return super().assert_target(manifest,identity,inspection)
+
+    def parse(self, operation, stdout):
+        if operation != 'version':
+            data = safe_json(stdout)
+            if isinstance(data,dict) and data.get('error'):
+                code = data['error']
+                messages = {
+                    'authentication_failed':'Daytona CLI active organization could not be verified. Use an existing browser-authenticated CLI session with organization-member access and the intended organization selected; API-key-only CLI profiles cannot supply this proof. No automatic login or SDK fallback occurs.',
+                    'unsupported':'This Daytona CLI version or operation is not supported. Review the pinned CLI contract or explicitly select the optional SDK transport.',
+                    'stale_plan':'Daytona CLI target or immutable artifact no longer matches the reviewed plan. Inspect and create a new plan.',
+                    'provider_failed':'Daytona CLI operation failed; raw provider output is withheld because it may contain credentials.'}
+                fail(messages.get(code,messages['provider_failed']), code if code in messages else 'provider_failed')
+        return super().parse(operation,stdout)
+
+    def bind_preconditions(self, operation, preconditions):
+        result = copy.deepcopy(operation)
+        config = json.loads(result['argv'][-1])
+        inspection = preconditions.get('inspection') if isinstance(preconditions,dict) else None
+        if not isinstance(inspection,dict):
+            fail('CLI execution requires approved remote inspection','stale_plan')
+        config['approved_inspection'] = inspection
+        if operation['id'] == 'create' and not config.get('snapshot_receipt'):
+            receipt = pick(inspection,{'snapshot_id','snapshot_image'})
+            if not receipt.get('snapshot_id') or not re.search(r'@sha256:[0-9a-f]{64}$',receipt.get('snapshot_image','')):
+                fail('CLI create requires the exact approved snapshot receipt','stale_plan')
+            config['snapshot_receipt'] = receipt
+        result['argv'][-1] = json.dumps(config,sort_keys=True,separators=(',',':'))
+        return result

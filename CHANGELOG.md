@@ -1,5 +1,13 @@
 # Changelog
 
+## CLI-first provider revision (unreleased)
+
+- Default Daytona to the installed official CLI 0.226.0 and its existing browser-authenticated user/configuration context, without requiring the optional Python SDK or a separate API key.
+- Preserve explicit `target.transport: sdk` compatibility, with source-bound transport selection and no fallback. Old plans must be regenerated.
+- Distinguish missing/incompatible tools from unchecked authentication; guided imports request explicit transport choice when sensitive runtime injection or authenticated probes require SDK.
+- Reject CLI secrets by default. Allow only explicitly nonsecret runtime values through process-visible CLI arguments, with plan disclosure. CLI logs and authenticated probes remain unsupported.
+- Bind provider organization, immutable snapshot, volume and sandbox identities before writes; project public fields only and preserve uncertainty on failed writes.
+
 ## 0.2.0a1 (unreleased, experimental opt-in)
 
 - Add passive existing-project discovery, deterministic resolution and optional private saved profiles, without requiring handwritten Onedeploy YAML or overwriting original application files.

@@ -658,7 +658,7 @@ def _finish(candidate):
             _unsupported(candidate, 'build.dockerfile', 'The native Railway source requires a root Dockerfile that is currently missing')
         if not _required(manifest, 'manifest'):
             try:
-                get_adapter(manifest['provider']).validate(manifest)
+                get_adapter(manifest['provider'], manifest).validate(manifest)
             except OnedeployError as error:
                 _unsupported(candidate, 'capability', error.message)
     # Ensure every normalized leaf has provenance without leaking raw literals.
@@ -745,13 +745,19 @@ def _required(manifest, format):
     missing = []
     if not manifest.get('name'):
         missing.append(_question('name', 'Choose an explicit application name'))
-    for field in sorted(get_adapter(manifest['provider']).required_fields):
+    for field in sorted(get_adapter(manifest['provider'], manifest).required_fields):
         if not manifest.get('target', {}).get(field):
             missing.append(_question('target.' + field, 'Select the exact provider destination identifier'))
     if format != 'manifest' and manifest.get('source', {}).get('trust_code') is not True:
         missing.append(_question('trust_code', 'Confirm you reviewed and trust the original executable build/startup source', 'boolean'))
     if manifest['provider'] == 'daytona':
         target = manifest.get('target', {})
+        sensitive_inputs = any(spec.get('secret', True) is not False for spec in manifest.get('variables', {}).values())
+        authenticated_checks = any(check.get('auth_variable') for check in manifest.get('checks', []))
+        if format != 'manifest' and 'transport' not in target and (sensitive_inputs or authenticated_checks):
+            missing.append(_question('target.transport',
+                                     'Explicitly choose a Daytona transport: CLI reuses existing login but cannot safely deliver secrets or authenticated probe credentials; SDK requires DAYTONA_API_KEY and supports these inputs. No automatic fallback.',
+                                     'choice', ['cli', 'sdk']))
         if 'mode' not in target:
             missing.append(_question('target.mode', 'Explicitly choose existing or create sandbox behavior', 'choice', ['create', 'existing']))
         if manifest.get('build') and not manifest['build'].get('snapshot_name'):
@@ -895,7 +901,7 @@ def inspect_resolution(discovery, answers=None):
     if _unsafe_literals(manifest):
         _error('invalid_config', 'Resolved profile contains unsupported literal credentials')
     try:
-        get_adapter(manifest['provider']).validate(manifest)
+        get_adapter(manifest['provider'], manifest).validate(manifest)
     except OnedeployError as error:
         return {'status': 'unsupported_capability', 'missing': [], 'conflicts': [], 'unsupported': [_question('capability', error.message)]}
     profile = {'version': VERSION, 'kind': 'profile', 'manifest': manifest, 'root': candidate['root'], 'source': copy.deepcopy(discovery['source']), 'discovery_id': discovery['id'], 'discovery': copy.deepcopy(discovery), 'resolution': {'answers': copy.deepcopy(answers), 'answers_digest': digest(answers), 'candidate': candidate['id'], 'normalizer_version': '1'}, 'provenance': provenance, 'warnings': list(dict.fromkeys(discovery['warnings'] + candidate['warnings'] + ['Profile contains operational identifiers, not credentials. Local source binding is not a portable deployment authorization.']))}
@@ -1062,8 +1068,9 @@ def intent_schema():
                           'questions': {'type': 'array', 'items': _portable_question_schema(), 'maxItems': 512}},
                          ['manifest', 'questions']),
         'settings': _portable_settings_schema(),
-        'requirements': _obj({'target_fields': {'type': 'array', 'uniqueItems': True, 'maxItems': 10,
-                                               'items': {'enum': ['account', 'project', 'environment', 'service', 'sandbox', 'snapshot', 'region', 'app', 'function', 'mode']}},
+        'requirements': _obj({'target_fields': {'type': 'array', 'uniqueItems': True, 'maxItems': 11,
+                                               'items': {'enum': ['account', 'project', 'environment', 'service', 'sandbox', 'snapshot', 'region', 'app', 'function', 'mode', 'transport']}},
+                              'transport': {'enum': ['cli', 'sdk']},
                               'storage': _portable_storage_schema(),
                               'snapshot': {'enum': ['none', 'existing', 'build']},
                               'ready_url': {'type': 'boolean'}},
@@ -1163,6 +1170,9 @@ def export_intent(profile):
               'warnings': ['Portable intent is non-executable and contains no source identity or approval.',
                            'Review the newly discovered code and explicitly confirm the new provider destination, storage and runtime secret sources.',
                            'Only transported static settings are compared; changed application code requires fresh review and a newly approved plan.']}
+    if manifest['provider'] == 'daytona':
+        result['requirements']['transport'] = manifest['target'].get('transport', 'cli')
+        result['requirements']['target_fields'] = sorted(set(result['requirements']['target_fields']) | {'transport'})
     return _validate_intent(result)
 
 
@@ -1244,14 +1254,20 @@ def inspect_intent_resolution(intent, discovery, answers=None):
     missing, conflicts = [], []
     if answers.get('trust_code') is not True:
         missing.append(_question('trust_code', 'Review and explicitly trust this destination project; portable intent never carries source approval', 'boolean'))
-    required_fields = set(intent['requirements']['target_fields']) | get_adapter(intent['provider']).required_fields | set(candidate['manifest'].get('target', {}))
+    required_fields = set(intent['requirements']['target_fields']) | get_adapter(intent['provider'], {'target': merged.get('target', {})}).required_fields | set(candidate['manifest'].get('target', {}))
     if intent['provider'] in {'modal', 'daytona'}:
         required_fields.add('mode')
+    if intent['provider'] == 'daytona':
+        required_fields.add('transport')
     for field in sorted(required_fields):
         if field == 'snapshot' and 'snapshot' in answers:
             continue
         if field not in answers.get('target', {}):
-            choices = ['existing', 'create'] if field == 'mode' else None
+            choices = ['existing', 'create'] if field == 'mode' else ['cli', 'sdk'] if field == 'transport' else None
+            if field == 'transport':
+                previous = intent['requirements'].get('transport', candidate['manifest'].get('target', {}).get('transport', 'cli'))
+                missing.append(_question('target.transport', 'Explicitly confirm the Daytona transport; previously selected ' + previous + '; no automatic backend switch', 'choice', choices))
+                continue
             missing.append(_question('target.' + field, 'Explicitly confirm this fresh provider destination; no target identifier is transported', 'choice' if choices else 'string', choices))
     # Intent is editable configuration, not an authorization record. Never let
     # mutable requirement flags suppress bindings independently present in the

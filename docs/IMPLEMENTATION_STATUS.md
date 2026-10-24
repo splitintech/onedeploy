@@ -1,5 +1,12 @@
 # Implementation and qualification status
 
+## Current CLI-first transport revision
+
+Daytona now defaults to official CLI 0.226.0 and existing browser-session reuse in the same OS user/configuration context. Optional explicit SDK transport remains available without automatic fallback. Railway/Modal continue using their official CLIs. Guided imports, agent JSON and the manifest path use the same transport selection and source-bound plan engine.
+
+CLI-only Daytona supports private create/build/start, identity/inspection/status/reconcile and unauthenticated probes. Explicitly nonsecret runtime values use process-visible arguments; secrets/default-secret values, authenticated probes and logs require SDK. Tool detection is not proof of authentication. No login, credential migration, real deployment or provider qualification was performed. See the current section in [verification](VERIFICATION.md) and [provider contracts](provider-contracts.md).
+
+
 This document separates implemented engineering, offline evidence, and live qualification. Version-specific offline evidence and explicit qualification limits are recorded in [verification](VERIFICATION.md). A provider CLI command returning zero is not application readiness.
 
 ## Current UX increment versus historical plan

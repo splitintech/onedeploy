@@ -165,7 +165,7 @@ def test_snapshot_identifier_not_portable_and_fresh_mode_required(tmp_path):
     target = tmp_path / 'target'; target.mkdir()
     result = d.inspect_intent_resolution(intent, target, {'trust_code': True, 'target': {'account': 'new', 'sandbox': 'new-sandbox', 'mode': 'create'}})
     assert any(item['field'] in {'snapshot', 'target.snapshot'} for item in result['missing'])
-    imported = d.import_intent(intent, target, {'trust_code': True, 'target': {'account': 'new', 'sandbox': 'new-sandbox', 'mode': 'create'}, 'snapshot': 'fresh-snapshot'})
+    imported = d.import_intent(intent, target, {'trust_code': True, 'target': {'account': 'new', 'sandbox': 'new-sandbox', 'mode': 'create', 'transport': 'cli'}, 'snapshot': 'fresh-snapshot'})
     assert imported['manifest']['target']['snapshot'] == 'fresh-snapshot'
 
 

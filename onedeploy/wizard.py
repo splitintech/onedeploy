@@ -61,7 +61,7 @@ def review_summary(plan: dict) -> str:
              "Verification is layered: provider acceptance is not process readiness, authentication or production qualification.",
              "Storage is not backed up or migrated. Review ownership, persistence and single-writer requirements."]
     try:
-        caps = get_adapter(manifest["provider"]).capabilities
+        caps = get_adapter(manifest["provider"], manifest).capabilities
         lines.append("Provider lifecycle: " + caps["lifecycle_assumptions"])
         lines.append("Listener limits: " + caps["listener_port"])
     except (KeyError, OnedeployError):
@@ -184,8 +184,8 @@ class DeploymentWizard(App):
                 yield Static("Experimental / offline-tested. No live deployment qualification is implied.", classes="hint")
                 yield Select([(name.title(), name) for name in PROVIDERS], value=self.provider, allow_blank=False, id="provider")
                 yield Static("", id="provider-details", markup=False)
-                yield Static("Installed tools: not checked. Authentication: not checked.", id="tool-status", markup=False)
-                yield Button("Check installed tools", id="doctor")
+                yield Static("Selected provider CLI: not checked. Authentication: not checked.", id="tool-status", markup=False)
+                yield Button("Check selected CLI", id="doctor")
                 yield Static("", id="setup-guidance", markup=False)
                 yield Button("Continue to project", id="provider-next", variant="primary")
             with Vertical(id="step-project", classes="step"):
@@ -278,17 +278,21 @@ class DeploymentWizard(App):
         self.query_one("#status", Static).update(message)
 
     def _provider_details(self):
-        adapter = get_adapter(self.provider)
+        adapter = get_adapter(self.provider, self.profile.get("manifest") if self.profile else None)
         caps = adapter.capabilities
         self.query_one("#provider-details", Static).update(
             "Supported profiles: " + ", ".join(caps["profiles"]) + "\n"
             + "Artifact support: " + ", ".join(caps["artifact_types"]) + "\n"
             + "Lifecycle: " + caps["lifecycle_assumptions"] + "\n"
             + "Storage: " + caps["persistent_storage"])
+        transport = caps.get("transport", "cli")
+        auth = ("Explicit SDK transport requires DAYTONA_API_KEY; it does not reuse CLI login. "
+                if transport == "sdk" else "Reuses your installed CLI and existing login for the same OS user. ")
+        self.query_one("#doctor", Button).label = "Check selected " + transport.upper()
         self.query_one("#setup-guidance", Static).update(
             f"Official setup: {SETUP_LINKS[self.provider]}\n"
-            f"Offline-tested tool version: {adapter.supported_version}. Install and authenticate yourself if needed. "
-            "No automatic installs, tokens, credential storage or login. Tool availability is not authentication.")
+            f"Exact offline-tested {transport.upper()} version: {adapter.supported_version}. " + auth +
+            "No automatic installation, login, credential storage or transport fallback. Tool availability is not authentication.")
 
     def show_step(self, number: int):
         self.step = number
@@ -400,7 +404,7 @@ class DeploymentWizard(App):
             self._assign("candidate", Select.NULL)
             self.query_one("#candidate", Select).set_options([])
             self.query_one("#candidate-details", Static).update("Provider changed. Discover again; target mappings and runtime overrides were cleared.")
-            self.query_one("#tool-status", Static).update("Installed tools: not checked. Authentication: not checked.")
+            self.query_one("#tool-status", Static).update("Selected provider CLI: not checked. Authentication: not checked.")
             self._provider_details()
         elif ident == "candidate":
             self.invalidate(profile=True)
@@ -557,7 +561,7 @@ class DeploymentWizard(App):
     def _set_profile_choices(self, candidate: dict, value=None):
         self._profile_inferred = candidate.get("format") in {"dockerfile", "compose", "railway", "snapshot"}
         profile = candidate.get("manifest", {}).get("profile")
-        choices = get_adapter(self.provider).capabilities["profiles"] if self._profile_inferred else ([profile] if profile else [])
+        choices = get_adapter(self.provider, candidate.get("manifest")).capabilities["profiles"] if self._profile_inferred else ([profile] if profile else [])
         self.query_one("#runtime-profile", Select).set_options([(name, name) for name in choices])
         self._assign("runtime-profile", value if value is not None else Select.NULL if self._profile_inferred else profile or Select.NULL)
 
@@ -817,6 +821,7 @@ class DeploymentWizard(App):
             self.invalidate()
         elif action == "doctor":
             args["provider"] = self.provider
+            args["transport"] = self.profile.get("manifest", {}).get("target", {}).get("transport", "cli") if self.profile else "cli"
         elif action == "save-profile":
             if not self.profile:
                 raise OnedeployError("input_required", "Resolve a profile before exporting it.")
@@ -908,7 +913,7 @@ class DeploymentWizard(App):
             elif action == "deploy":
                 result = core.deploy(args["plan"], approval=args["plan"]["id"], env_file=args["env_file"], env_overrides=args["env_overrides"], state_dir=args["state_dir"], cancel_event=cancel_event, event_callback=self.progress)
             elif action == "doctor":
-                result = core.doctor(args["provider"])
+                result = core.doctor(args["provider"], transport=args.get("transport", "cli"))
             elif action in {"status-button", "advanced-status"}:
                 result = core.status(args["deployment"], state_dir=args["state_dir"])
             elif action == "logs":
@@ -1040,7 +1045,9 @@ class DeploymentWizard(App):
                 self.say("Reconciliation returned no executable plan. Read the result and use the evidence before any retry.")
         elif action == "doctor":
             self.query_one("#tool-status", Static).update(
-                f"Installed tool available: {bool(result.get('executable_available'))}. Compatible version: {bool(result.get('compatible'))}.\n"
+                f"Selected provider {result.get('selected_transport', 'cli').upper()} ({result.get('provider', self.provider)}): {result.get('status', 'not checked')}. "
+                f"Installed: {bool(result.get('executable_available'))}. Compatible version: {bool(result.get('compatible'))}.\n"
+                + str(result.get("next_step", "")) + "\n" +
                 "Authentication: not checked. Explicit remote inspection verifies identity before a plan can deploy.\n" + json.dumps(result, indent=2, sort_keys=True))
             self.say("Tool check complete. This is not an authentication or deployment check; offline exploration remains available.")
         elif action == "export-intent":

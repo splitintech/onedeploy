@@ -294,6 +294,12 @@
         "snapshot": {
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,254}$",
           "type": "string"
+        },
+        "transport": {
+          "enum": [
+            "cli",
+            "sdk"
+          ]
         }
       },
       "required": [],

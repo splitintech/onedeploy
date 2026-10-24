@@ -125,3 +125,12 @@ Material input/source/provider/answer changes require re-discovery/resolution or
 A successful status/reconciliation command only means the observation completed. Inspect `local_state`, provider state and verification layers. `provider_accepted`, `process_running`, `readiness_passed`, `application_checks_passed`, `ingress_verified` and `application_qualified` are distinct. One declared protected route passing negative and authenticated checks does not prove every route's access control or production suitability.
 
 `logs --follow --json` emits newline-delimited result envelopes for changed bounded snapshots and a terminal result. Identical consecutive snapshots are suppressed; changed snapshots can overlap. It is not a lossless incremental stream. Ctrl-C ends polling with exit 8 and does not stop the cloud deployment. Logs can contain private application data despite best-effort redaction; request them deliberately and never forward them automatically.
+
+
+## Installed provider authentication and Daytona transports
+
+Use the same operating-system user/configuration context as the already authenticated official CLI. `doctor` proves local availability/version only, never login. Remote inspection verifies target identity before deployment. Onedeploy does not import credentials from another agent or computer, install tools automatically, or initiate login.
+
+Daytona defaults to official CLI 0.226.0 with browser-session reuse. Profiles explicitly choosing `target.transport: sdk` use the optional SDK 0.226.0 and its separate API key; there is no automatic fallback. Agent resolution must answer any transport question explicitly. Switching transport invalidates prior plans and requires a fresh source-bound plan and approval.
+
+CLI runtime variables must be explicitly `secret: false`, and their values become visible in the local provider process arguments. Plans disclose that exposure without persisting the values. Sensitive or unspecified-secrecy variables, authenticated probes and logs require explicit SDK transport. Never change a variable's secrecy classification merely to make validation pass. A provider API-key-only CLI profile cannot satisfy the browser active-organization proof; return the typed actionable failure instead of trying another auth route automatically.

@@ -447,12 +447,19 @@
               "region",
               "app",
               "function",
-              "mode"
+              "mode",
+              "transport"
             ]
           },
-          "maxItems": 10,
+          "maxItems": 11,
           "type": "array",
           "uniqueItems": true
+        },
+        "transport": {
+          "enum": [
+            "cli",
+            "sdk"
+          ]
         }
       },
       "required": [
