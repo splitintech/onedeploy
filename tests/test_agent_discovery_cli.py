@@ -807,6 +807,7 @@ def test_portable_import_rebinds_each_provider_without_calls(tmp_path, capsys, m
     if provider == "daytona":
         assert "snapshot_name" in missing
         fresh["snapshot_name"] = "fresh-reviewed-snapshot"
+        fresh["target"]["transport"] = "cli"
     else:
         assert {"target.app", "target.function"} <= missing
         fresh["target"].update(app="example-asgi", function="web")

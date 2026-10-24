@@ -1,7 +1,12 @@
 import json
 from types import SimpleNamespace
 import pytest
-from onedeploy.providers import get_adapter
+from onedeploy.providers import get_adapter as provider_adapter
+
+# Preserve all historical SDK transport regression contracts explicitly.
+# CLI-default contracts are exercised separately in test_daytona_cli.py.
+def get_adapter(name):
+    return provider_adapter(name, {"target":{"transport":"sdk"}} if name == "daytona" else None)
 from onedeploy.providers import daytona_bridge
 from onedeploy.errors import OnedeployError
 
@@ -9,7 +14,7 @@ from onedeploy.errors import OnedeployError
 def manifest(provider):
     targets = {'railway':{'account':'user@example.com','project':'proj','environment':'env','service':'svc'},
                'modal':{'account':'workspace','environment':'main','app':'my-app'},
-               'daytona':{'account':'org','sandbox':'sandbox','snapshot':'snap','mode':'create'}}
+               'daytona':{'account':'org','sandbox':'sandbox','snapshot':'snap','mode':'create','transport':'sdk'}}
     return {'version':1,'name':'demo','provider':provider,'profile':'asgi',
             'source':({'path':'.','entrypoint':'app.py','trust_code':True} if provider=='modal' else {'path':'.'}),'target':targets[provider],
             'variables':{'API_KEY':{'type':'string','secret':True}}}
@@ -392,7 +397,7 @@ def test_daytona_project_pipeline_real_adapter_and_core(tmp_path,monkeypatch):
     from onedeploy import core
     root=tmp_path/'project';root.mkdir();(root/'Dockerfile').write_text('FROM scratch\n')
     m={'version':1,'name':'build-test','provider':'daytona','profile':'docker-http','source':{'path':'.'},
-       'target':{'account':'org','sandbox':'new-sandbox','mode':'create'},
+       'target':{'account':'org','sandbox':'new-sandbox','mode':'create','transport':'sdk'},
        'build':{'context':'.','dockerfile':'Dockerfile','snapshot_name':'new-snapshot'}}
     path=root/'onedeploy.yaml';path.write_text(yaml.safe_dump(m))
     calls=[];state={'snapshot':False,'sandbox':False}

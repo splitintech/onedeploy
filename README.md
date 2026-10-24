@@ -18,6 +18,10 @@ onedeploy tui --wizard --path /absolute/path/to/your/project
 
 Python 3.11+ is required. Provider tools and existing authentication are separate prerequisites. Installing Onedeploy does not log in, create credentials or cloud resources, or publish a package. Do not assume a similarly named registry package is this repository.
 
+## Daytona uses your existing CLI session
+
+Daytona defaults to official CLI **0.226.0** and an existing browser login in the same local user/configuration context. No Python Daytona SDK or separate API key is needed for this path. Build/create, start, inspection, status and unauthenticated readiness checks are supported. Only explicitly nonsecret runtime variables can use process-visible CLI arguments; sensitive/default-secret injection, CLI logs and authenticated checks are unsupported. Services needing those features must explicitly select `target.transport: sdk`, install SDK **0.226.0**, and configure its separate API key. There is no automatic SDK fallback. New source-bound plans are required after changing transport; old plans cannot be replayed. See [setup and migration](docs/GETTING_STARTED.md#daytona-cli-first-and-explicit-sdk-migration) and the [provider contract](docs/provider-contracts.md#daytona).
+
 ## Existing project, three steps
 
 1. **Choose provider.** Review supported profiles and check installed tools. Authentication is not assumed from tool availability; provider inspection is a separate explicit action.

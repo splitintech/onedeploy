@@ -22,6 +22,32 @@ Use Python 3.11 or newer. The core is portable Python; filesystem protection and
 
 No package-registry release is implied. Do not assume an identically named package on a public registry is this repository; use a reviewed checkout or built wheel from this source.
 
+## Daytona CLI-first and explicit SDK migration
+
+The default Daytona transport uses official CLI **0.226.0**, independently published in the [official release](https://github.com/daytona/clients/releases/tag/v0.226.0). Install that CLI deliberately using its [official instructions](https://www.daytona.io/docs/en/tools/cli/), and use an existing browser-authenticated session. Run Onedeploy under the same operating-system user and CLI configuration context. Being an agent does not grant access to someone else's login. Onedeploy neither logs you in nor directly reads/copies credential files; the official CLI manages its saved session. `doctor` checks prerequisites; explicit remote inspection verifies the active organization against `target.account` without retaining member personal information.
+
+The default needs neither the Daytona Python SDK nor a separate API key. It supports builds, creation, start, status, inspect, reconcile and unauthenticated localhost readiness/application checks. Runtime variables explicitly classified `secret: false` use CLI `--env` arguments, visible to local process inspection. Secrets and variables without that explicit classification are rejected because the CLI has no secure injection channel. Application logs and authenticated checks are also unsupported. Never relabel credentials/private data as nonsecret, put them in source, or include their values in discovery answers.
+
+For a service needing environment injection, logs or authenticated checks, deliberately keep the legacy SDK backend instead:
+
+```sh
+python -m pip install -c requirements-all.lock -e '.[daytona]'
+```
+
+Add the nonsecret selector to your existing target, preserving its other reviewed fields:
+
+```yaml
+target:
+  account: YOUR_ORGANIZATION_ID
+  sandbox: YOUR_SANDBOX_NAME
+  mode: existing
+  transport: sdk
+```
+
+Configure `DAYTONA_API_KEY` separately through your private local environment, never a CLI argument or committed file. This backend requires SDK **0.226.0**; an existing CLI browser session does not replace the SDK key. Omitting `transport` (or setting `cli`) selects CLI, with no automatic fallback. For CLI migration, retain the true secrecy classification of every runtime variable. Apps requiring sensitive injection must remain explicitly on SDK.
+
+Generate and review a **new** source-bound plan after selecting the transport. Adapter-version `2-*` binding invalidates old SDK-era plans; never modify a saved plan to bypass that check. Use the normal local preview, explicitly requested remote inspection and exact-plan approval steps below. This migration does not authorize deployment or prove live-provider qualification. Prior SDK test records remain historical evidence, not new CLI test results.
+
 ## Existing project: experimental three-step wizard
 
 ```sh
@@ -34,7 +60,7 @@ onedeploy tui --wizard --path /absolute/path/to/your/project
 2. **Choose project.** Enter a project directory or supported file path. Review discovered candidates and choose the intended input/service. Choose the supported runtime profile explicitly when it is inferred, supply missing nonsecret answers, review code trust and select a private env file or use masked runtime input. **Add runtime variable references** lets you declare names, environment sources, types and requirements without putting values in the profile. Compose dependency/storage requirements are expanded into labeled fields, not a request to handwrite YAML. Incomplete or unsupported mappings stop before planning; switching providers requires new target choices. Discovery and resolution preserve original application files.
 3. **Review and deploy.** Make a local preview first or explicitly enable read-only remote inspection using your existing authentication. Review source, exact target, changes, variable recipients, storage/ingress/lifecycle implications, cost uncertainty and verification limits. A local preview cannot execute. The deliberate **Deploy this plan** action binds the reviewed immutable plan without asking you to copy a plan ID. Changes require a new review.
 
-Status and bounded log snapshots are available after execution. Advanced/recovery controls retain access to interrupted or uncertain operations. Cancelling local work does not promise remote rollback, deletion or a spending cap. Do not retry a deployment until its outcome is established.
+Status and, where supported by the selected transport, bounded log snapshots are available after execution. Daytona CLI mode does not support application logs. Advanced/recovery controls retain access to interrupted or uncertain operations. Cancelling local work does not promise remote rollback, deletion or a spending cap. Do not retry a deployment until its outcome is established.
 
 Optional profiles can save a resolution for reuse; they are not mandatory application files and are not credentials. In Step 2, enter a saved profile JSON path and use **Load saved profile from this path** or **Discover project**. The current provider and source binding must match; source trust resets and you resolve again before reviewing a fresh plan. Keep profiles private, outside the source bundle or in excluded `.onedeploy`. These local profiles bind absolute paths. For another checkout/machine, [export a separate non-executable intent](PORTABLE_INTENT.md) and resolve it against freshly discovered source and newly confirmed destinations, rather than editing hashes. See [profile storage, portability and invalidation](CONFIGURATION.md#discovery-and-optional-profiles).
 
@@ -100,7 +126,7 @@ onedeploy status --deployment DEPLOYMENT_ID --json
 onedeploy resume --deployment DEPLOYMENT_ID --plan-out recovery-plan.json --json
 ```
 
-To watch logs, the CLI can repeatedly request bounded snapshots:
+For transports supporting logs (not Daytona CLI mode), Onedeploy can repeatedly request bounded snapshots:
 
 ```sh
 onedeploy logs --deployment DEPLOYMENT_ID --follow --poll-interval 5 --json
@@ -136,13 +162,13 @@ python -m pytest -q
 python -m build --no-isolation
 ```
 
-Install the optional provider support deliberately, after reviewing its prerequisites:
+Install optional SDK support deliberately, after reviewing its prerequisites. The `daytona` extra is only for explicit `target.transport: sdk`, not default CLI mode:
 
 ```sh
 python -m pip install -c requirements-all.lock -e '.[tui,daytona,modal]'
 ```
 
-The Railway CLI is a separate official tool; the provider guide specifies the checked version. Onedeploy does not download or upgrade it automatically.
+The Railway and default Daytona CLIs are separate official tools; the provider guide specifies the checked version. Onedeploy does not download or upgrade them automatically.
 
 ## Guided project creation
 

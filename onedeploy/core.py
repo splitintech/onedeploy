@@ -152,7 +152,7 @@ def inventory(root,allow_dirty=False,exclude_paths=()):
 
 def _adapter(manifest):
     from .providers import get_adapter
-    return get_adapter(manifest["provider"])
+    return get_adapter(manifest["provider"], manifest)
 
 def _runtime_manifest(manifest, names):
     effective=dict(manifest)
@@ -236,6 +236,8 @@ def _make_plan(manifest, root, manifest_path, env_file=None, allow_dirty=False,
                       "Provider resource costs are not capped by this plan.",
                       "Runtime variables will be transmitted only to the named provider and target."],
           "qualification":"experimental/offline-tested"}
+    if manifest["provider"] == "daytona" and manifest.get("target", {}).get("transport", "cli") == "cli" and variables:
+        plan["warnings"].append("Explicitly nonsecret Daytona runtime values are passed through CLI --env arguments and are visible to local process inspection. Never classify credentials or private data as nonsecret.")
     plan["warnings"].extend(_listener_warnings(manifest))
     if manifest.get("dependencies"):
         plan["warnings"].append("External dependency configuration is validated locally; connectivity, migrations, ownership and authorization are not inferred.")
@@ -301,14 +303,25 @@ class CommandRunner:
             _error("invalid_config","Invalid provider command arguments")
         allowed={"railway","daytona","modal"}
         if argv[0]==sys.executable:
-            bridge=Path(__file__).parent/"providers"/"daytona_bridge.py"
-            if len(argv)<4 or argv[1]!="-I" or Path(argv[2]).absolute()!=bridge.absolute():
+            bridges={(Path(__file__).parent/"providers"/name).absolute() for name in ("daytona_bridge.py", "daytona_cli_bridge.py")}
+            if len(argv)<4 or argv[1]!="-I" or Path(argv[2]).absolute() not in bridges:
                 _error("invalid_config","Untrusted Python command rejected")
         elif argv[0] not in allowed:
             _error("invalid_config","Untrusted provider executable rejected")
         env={"PATH":os.environ.get("PATH",os.defpath),"LANG":"C.UTF-8","LC_ALL":"C.UTF-8"}
         # HOME is needed for explicitly existing CLI authentication, never application forwarding.
         if "HOME" in os.environ: env["HOME"]=os.environ["HOME"]
+        # Preserve only the official Daytona CLI's local configuration location.
+        # This includes its isolated bridge, but never ambient credentials or hooks.
+        if argv[0] in {"daytona",sys.executable}:
+            context_keys=["HOME","XDG_CONFIG_HOME","DAYTONA_CONFIG_DIR"]
+            if os.name=="nt": context_keys.append("APPDATA")
+            for key in context_keys:
+                if key in os.environ:
+                    value=os.environ[key]
+                    if not value or "\x00" in value or not Path(value).is_absolute():
+                        _error("invalid_config","Provider configuration directory must be an absolute nonempty path")
+                    env[key]=value
         keys=step.get("env_keys",[])
         control={"RAILWAY_TOKEN","RAILWAY_API_TOKEN","DAYTONA_API_KEY","MODAL_TOKEN_ID","MODAL_TOKEN_SECRET"}
         if any(k not in control for k in keys): _error("invalid_config","Provider requested an unapproved environment variable")
@@ -317,7 +330,7 @@ class CommandRunner:
         runtime_keys=step.get("runtime_env_keys",[])
         reserved=("RAILWAY_","DAYTONA_","MODAL_","PYTHON","LD_","DYLD_")
         for key in runtime_keys:
-            if key not in variables or key.startswith(reserved) or key in {"PATH","HOME","SHELL","BASH_ENV","ENV"}:
+            if key not in variables or key.startswith(reserved) or key in {"PATH","HOME","SHELL","BASH_ENV","ENV","XDG_CONFIG_HOME","DAYTONA_CONFIG_DIR","APPDATA"}:
                 _error("invalid_config","Unsafe or unresolved runtime environment variable")
             env[key]=variables[key]
         selected={key:variables[key] for key in step.get("stdin_env_keys",[]) if key in variables}
@@ -601,6 +614,8 @@ def deploy(plan,env_file=None,approval=None,state_dir=None,env_overrides=None,ca
                     except OnedeployError:
                         journal["state"]="failed"; _atomic(path,canonical(journal)); raise
                 executable_step=adapter.materialize_step(step,journal["operations"]) if hasattr(adapter,"materialize_step") else step
+                if hasattr(adapter,"bind_preconditions"):
+                    executable_step=adapter.bind_preconditions(executable_step,plan["remote_preconditions"])
                 if executable_step.get("id")!=step["id"] or executable_step.get("mutating")!=step.get("mutating"):
                     _error("invalid_config","Materialized operation changed its approved identity")
                 if plan.get("release_tag") and plan["kind"]=="deploy":
@@ -990,16 +1005,54 @@ def inspect_profile(profile):
             "warnings": _listener_warnings(manifest)}
 
 
-def doctor(provider):
+def doctor(provider, transport="cli"):
+    """Check the selected local transport, without login or remote inspection."""
     from .providers import get_adapter
-    adapter=get_adapter(provider)
-    result={"provider":provider,"executable_available":False,"compatible":False,
+    if transport not in {"cli", "sdk"} or (transport == "sdk" and provider != "daytona"):
+        _error("invalid_config", "SDK transport is supported only for Daytona")
+    adapter=get_adapter(provider, {"target": {"transport": transport}} if provider == "daytona" else None)
+    if transport == "sdk":
+        import importlib.util
+        available=importlib.util.find_spec("daytona") is not None
+    else:
+        available=shutil.which(provider) is not None
+    result={"provider":provider,"executable_available":available,"compatible":False,
             "expected_version":getattr(adapter,"supported_version",None),
+            "authentication":"not_checked","status":"missing" if not available else "version_check_failed",
             "capabilities":getattr(adapter,"capabilities",{}),"qualification":"experimental/offline-tested",
-            "warnings":["This check does not log in, validate credentials, or create resources."]}
+            "warnings":["Uses the selected provider's installed CLI and existing login for the same OS user. "
+                        "No automatic installation, login, or credential storage.",
+                        "This local version check does not validate credentials or create resources. "
+                        "Explicit remote inspection verifies identity and target access before deployment."]}
+    result["selected_transport"]=transport
+    if transport == "sdk":
+        result["warnings"]=["Explicit Daytona SDK transport uses DAYTONA_API_KEY, not the installed CLI login. No automatic fallback between transports.",
+                            "This local version check does not validate credentials or create resources."]
+    if not available:
+        if transport == "sdk":
+            result["error"]=OnedeployError("provider_failed", "Selected Daytona SDK is not installed for this Python interpreter").to_dict()
+            result["next_step"]="Install the optional pinned Daytona SDK in this Python environment, then rerun doctor --provider daytona --transport sdk."
+            return result
+        result["error"]=OnedeployError("provider_failed", "Selected provider CLI was not found on PATH").to_dict()
+        result["next_step"]="Make the official provider CLI available on PATH for this OS user, then rerun the check."
+        return result
     try:
         result["transport"]=_check_version(adapter,Path.cwd())
-        result["executable_available"]=True; result["compatible"]=True
+        result["compatible"]=True
+        result["status"]="ready"
+        result["next_step"]="Reuse your existing CLI login; opt into remote inspection to verify identity and target access."
     except OnedeployError as error:
         result["error"]=error.to_dict()
+        if error.code=="unsupported":
+            result["status"]="incompatible"
+            result["next_step"]=f"CLI is installed, but its version is not compatible with the exact offline-tested pin {result['expected_version']}."
+        else:
+            result["next_step"]="CLI was found on PATH, but the local version check failed. Check that it can run as this OS user."
+    if transport == "sdk":
+        if result["compatible"]:
+            result["next_step"]="Use DAYTONA_API_KEY for this explicit SDK transport; remote inspection verifies identity and target access."
+        elif result["status"] == "incompatible":
+            result["next_step"]=f"SDK is installed but differs from the exact offline-tested pin {result['expected_version']}."
+        else:
+            result["next_step"]="SDK was found, but its local version check failed in this Python environment."
     return result

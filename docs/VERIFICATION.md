@@ -2,6 +2,17 @@
 
 Checked 2026-10-23. Source version: 0.2.0a1, experimental. Historical baseline evidence and the new UX increment are recorded separately; the baseline count below is not a test result for later changes.
 
+## CLI-first transport revision (2026-10-23)
+
+**Final whole-tree result: 581 passed in 178.57 seconds.** Final runtime source includes the explicit nonsecret injection disclosure and guided transport-selection regressions.
+
+- Default Daytona official CLI contract is pinned to **0.226.0**, the latest official clients release checked on this date. Release/source review confirmed active-organization lookup, JSON shapes, pagination, create flags and per-argument `exec` quoting. No installed provider authentication or deployment command was executed.
+- Tests cover default CLI vs explicit SDK, true/missing-secret rejection, explicitly public runtime argument disclosure/redaction, exact target/snapshot/volume binding, bounded output/pagination, identity projection, uncertainty, and guided/agent transport selection. Existing SDK tests run against explicit SDK selection rather than silently changing their backend.
+- A real isolated subprocess test uses a fake `daytona` executable and dedicated HOME, forbids SDK import/spec lookup, and rejects ambient API-key/API-URL forwarding. It proves local CLI detection does not require the optional SDK and does not claim authentication.
+- Independent review rechecked snapshot receipts for all creates, volume ID/name binding, existing sandbox identity before start, reader completion, and official probe argument quoting. No remaining concrete blocker was found in that review scope.
+- Rebuilt wheel installed into a separate directory. With no Daytona SDK installed, CLI-default and explicit SDK adapter selection both load, CLI version command construction succeeds, and all nine installed schema commands emit valid JSON. `pip check` is clean in the test environment.
+- Linux/Python 3.12 offline tests only. No macOS/Windows, actual provider login/session refresh, paid resource creation, live startup, network readiness or production qualification is inferred. CLI API-key-only identity, sensitive runtime injection, authenticated probes and logs remain explicit capability limits. See [provider contracts](provider-contracts.md).
+
 ## Experimental U1–U5 increment
 
 **Final whole-tree aggregate: 506 passed in 233.98 seconds (3:53).** This run covers the final runtime source after the native-resource portable-binding fixes. Final independent review and the rebuilt installed-wheel checks below also passed. The [U1–U5 acceptance matrix](UX_ACCEPTANCE.md) distinguishes implemented/offline-tested behavior from manual usability, platform and live-provider qualification; these separate gates are not all closed.

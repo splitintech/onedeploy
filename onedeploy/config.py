@@ -51,7 +51,7 @@ def schema():
             "health_path":probe_path,"ready_url":{"type":"string","pattern":"^https://","maxLength":2048},"ready_path":probe_path,
             "timeout":{"type":"integer","minimum":1,"maximum":3600}}),
         "variables":{"type":"object","propertyNames":{"pattern":KEY.pattern},"additionalProperties":variable,"maxProperties":128},
-        "target":_object({**{k:identifier for k in ["account","project","environment","service","sandbox","snapshot","region","app","function"]}, "mode":{"enum":["create","existing"]}},["account"]),
+        "target":_object({**{k:identifier for k in ["account","project","environment","service","sandbox","snapshot","region","app","function"]}, "mode":{"enum":["create","existing"]}, "transport":{"enum":["cli","sdk"]}},["account"]),
         "resources":_object({k:{"type":"integer","minimum":0,"maximum":1048576} for k in ["cpu","memory_mb","disk_gb","auto_stop_minutes"]}),
         "ingress":_object({"mode":{"enum":["private","existing"]}}),
         "storage":{"type":"array","maxItems":16,"items":_object({

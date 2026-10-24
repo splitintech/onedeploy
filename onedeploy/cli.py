@@ -85,6 +85,7 @@ def parser():
             c.add_argument("--max-polls", type=int, default=0, help="Stop after this many reads; 0 waits until interrupted")
         if name == "doctor":
             c.add_argument("--provider", required=True, choices=["daytona", "railway", "modal"])
+            c.add_argument("--transport", choices=["cli", "sdk"], default="cli", help="Daytona only: explicitly select sdk instead of the default installed CLI")
         if name == "schema":
             c.add_argument("--kind", choices=["manifest", "discovery", "profile", "intent", "answers", "resolution", "result", "progress", "error"], default="manifest")
         if name == "init":
@@ -339,7 +340,7 @@ def dispatch(args):
             return follow_logs(args)
         return core.logs(args.deployment, state_dir=args.state_dir, follow=False)
     if cmd == "doctor":
-        return core.doctor(args.provider)
+        return core.doctor(args.provider, transport=args.transport)
     if cmd in {"resume", "rollback"}:
         kwargs = {"state_dir": args.state_dir}
         if cmd == "rollback":
