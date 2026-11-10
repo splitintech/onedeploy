@@ -1,8 +1,8 @@
 # AutoDeploy engineering preview
 
-**Implemented:** offline source-bound plans, Python rollout engine, durable single-host state, explicit Daytona SDK boundary, and a reusable image-and-plan GitHub workflow. **Not enabled:** unattended paid GPU rollout, application routing, a background autoscaler, or production migration. No cloud account or registry publication happens when you install/import the library or run the default tests.
+OneDeploy adds a provider-neutral GitHub release interface with a first concrete **Daytona GPU/Whisper profile**. Code now covers source-bound plans, guarded rollout, an authenticated persistent controller, worker leases, scale-to-zero, conservative spend reservations and an executable CUDA worker. **Live image build, GPU behavior and production cutover have not been qualified.** Other vendors are capability/roadmap entries, not working AutoDeploy adapters merely because they have a CLI.
 
-## Install from this reviewed branch
+## 1. Install an isolated reviewed checkout
 
 ```sh
 git clone --branch autodeploy https://github.com/splitintech/onedeploy.git
@@ -15,69 +15,123 @@ onedeploy autodeploy --help
 python -m pytest -q
 ```
 
-Use Python 3.11–3.13, as for existing OneDeploy. This is a source checkout, not a claim that an AutoDeploy package has been published to PyPI. Existing `onedeploy plan/deploy` and CLI-first Daytona behavior are unchanged.
+The library supports Python 3.11–3.13; the supplied worker image targets Python 3.12. Install `daytona==0.231.0` **only in this separate AutoDeploy controller environment** before using live commands. Do not silently upgrade the existing legacy Daytona 0.226.0 environment. Installation and imports do not authenticate or provision resources. This is a reviewed source checkout, not a claim of a new published package.
 
-## First offline plan
+## 2. Check provider capabilities first
+
+```sh
+onedeploy autodeploy capabilities --json
+onedeploy autodeploy capabilities --provider daytona --json
+```
+
+Capability negotiation distinguishes native Git deployment, orchestrated adapters, workspaces and held/unverified products. Prefer a verified native integration and select exactly one trigger owner; never enable a second webhook that duplicates deployment. The [20-provider expansion plan](PROVIDER_EXPANSION_PLAN.md) records prerequisites and qualification gates. None is marked live-qualified by offline tests.
+
+## 3. Prepare the model and reviewed worker image
+
+Use [the supplied worker](../examples/whisper-worker/README.md). It loads local CUDA faster-whisper weights only; no per-request model downloads and no OpenAI hosted `whisper-1` API assumption. Identify and license-review the intended model revision first.
+
+Create an existing Daytona model volume containing a versioned prefix such as:
+
+```text
+whisper/revision-123/
+  model/                 # complete local faster-whisper model files
+  manifest.json          # SHA-256 mapping of every file inside model/
+  qualification.wav      # synthetic/authorized fixed test audio
+```
+
+The manifest and fixture are outside `model/` to avoid self-referential checksums. The model directory must contain exactly the files listed in the manifest. Record the manifest file's SHA-256 in the release plan. Populate the volume once through an explicitly authorized staging process; this implementation does not silently create a volume or download model assets. All workers mount that versioned prefix and verify it. Each GPU still loads its own RAM/VRAM. The volume API does not expose a read-only mount flag here: immutability is an operating policy, not an invented provider guarantee.
+
+Build the worker from `examples/whisper-worker/Dockerfile`, which pins the verified official CUDA base metadata and hash-locks Python packages. It preserves the base entrypoint and starts the server through Daytona's authenticated process session after mounting inputs. Publish the resulting image to an approved registry and use its digest, not a mutable tag. Registry metadata inspection is not a successful image build or proof of CUDA/toolbox compatibility.
+
+## 4. Review deployment, runtime and budget policy
 
 ```sh
 onedeploy autodeploy init --output /tmp/autodeploy.json --json
 ```
 
-Edit the JSON with the real `deployment_id`, GitHub `repository`, deployment `branch`, provider account identifier in `target`, explicit CPU/RAM/disk/GPU settings, total worker limit and reviewed budget. Template values are placeholders, not verified provider resources. A limit of one worker cannot perform overlapping replacement of an already-running worker; use a reviewed limit permitting the candidate plus the old worker if zero downtime is required.
+Replace every placeholder. Configuration binds repository, branch, account (`target`), deployment ID, explicit CPU/RAM/disk/GPU settings, maximum workers and budget. The template is syntactically valid but not provider-verified. A maximum of one worker cannot overlap an old worker and a rollout candidate; select an explicitly approved limit that supports the desired availability.
+
+Runtime JSON must contain exactly:
+
+```json
+{
+  "schema_version": 1,
+  "model_volume_id": "EXISTING_VOLUME_ID",
+  "model_subpath": "whisper/revision-123",
+  "model_directory": "model",
+  "model_manifest": "manifest.json",
+  "synthetic_audio": "qualification.wav",
+  "synthetic_text": "The exact expected synthetic transcript."
+}
+```
+
+Budget policy binds both normalized configuration and runtime digests. Fields are `schema_version: 1`, `config_digest`, `runtime_digest`, `concurrency_per_worker: 1`, `job_timeout_seconds`, `total_hourly_rate`, `max_worker_seconds`, `allocation_overhead_usd` and `max_total_usd`. Obtain current **all-in** CPU/RAM/disk/GPU rates; do not substitute GPU-only pricing. Runtime digest binds volume, model paths and qualification settings. `max_worker_seconds` must use whole minutes, cover startup plus a job and be at most 24 hours; it becomes Daytona's hard wall-clock TTL. `max_total_usd` cannot exceed the deployment budget.
+
+Compute normalized digests with `DeploymentConfig.from_dict(...).to_dict()`, `RuntimeConfig.from_dict(...).to_dict()` and `onedeploy.autodeploy.models.digest`. No secrets belong in these files.
 
 ```sh
-onedeploy autodeploy validate --config /tmp/autodeploy.json --json
+onedeploy autodeploy setup --config /tmp/autodeploy.json \
+  --runtime /secure/runtime.json --policy /secure/policy.json --json
+```
+
+Setup is offline validation and prints the exact policy digest to review. It does not establish authorization, GPU availability or provider pricing. The ledger reserves full worker lifetime plus overhead per allocation and never automatically refunds uncertain spend. It enforces approved active slots across rollout candidates and pool workers. Estimates cannot override actual provider prices or replace provider billing alerts.
+
+## 5. Create an immutable source-bound plan
+
+```sh
 onedeploy autodeploy plan \
   --config /tmp/autodeploy.json --source /path/to/application \
   --commit FULL_40_CHARACTER_COMMIT_SHA \
   --image ghcr.io/owner/application@sha256:FULL_64_CHARACTER_DIGEST \
-  --model-digest MODEL_MANIFEST_SHA256 \
-  --evidence-digest TEST_EVIDENCE_SHA256 \
+  --model-digest MODEL_MANIFEST_SHA256 --evidence-digest TEST_EVIDENCE_SHA256 \
   --out /tmp/rollout-plan.json --json
 ```
 
-Replace the uppercase markers; these are explanatory examples, not executable identifiers. The source must be clean, including untracked files, and match the configured origin/branch and exact commit. Keep output outside the checkout or under its ignored `.onedeploy/` directory. JSON is strict and bounded; duplicate fields, unknown configuration fields and mutable image references fail. Existing output files are never overwritten.
+Uppercase markers must be replaced. Source must be clean, including untracked files, and match configured GitHub origin, branch and exact commit. Keep output outside source or under an ignored directory. Strict bounded JSON rejects unknown/duplicate fields; output files are created exclusively. Hashes identify source/evidence but do not prove test success or permission to deploy.
 
-The plan binds commit/tree, configuration, model/evidence digests and image digest. A digest identifies evidence; it does not prove test success or user authorization. The plan's `id` is an integrity identifier, not a credential or permission grant.
+## 6. Explicitly authorize and apply
 
-## CLI operations and status
+Live commands make real API calls and can incur costs. Configure `DAYTONA_API_KEY` through approved secret storage in the isolated environment, never command arguments or committed files. After reviewing the plan and policy:
 
-| Operation | Current behavior |
-| --- | --- |
-| `init`, `validate`, `plan` | Implemented offline; no provider calls |
-| `status --deployment ID --state /durable/controller.sqlite` | Read-only view of existing controller state |
-| `apply --plan FILE --source PATH --approve-plan ID --state FILE` | Validates source/approval, then fails closed with `unsupported_capability` until a built-in qualified live controller is enabled |
-| `reconcile`, `rollback`, `drain` | Reserved CLI entrypoints, intentionally capability-gated; not advertised as live operations |
-
-The Python library below supplies lifecycle operations for a trusted application integration. CLI gates must not be removed merely to make a demo return success.
-
-## Python integration
-
-```python
-from onedeploy.autodeploy.models import DeploymentConfig, ReleaseSpec
-from onedeploy.autodeploy.state import StateStore
-from onedeploy.autodeploy.reconciler import Reconciler
-
-config = DeploymentConfig.from_dict(reviewed_config)
-spec = ReleaseSpec.from_dict(reviewed_release)
-store = StateStore('/durable/controller.sqlite')
-engine = Reconciler(store, qualified_adapter)
-release = engine.plan(config, spec)
-# Authorization is supplied by the host application's trusted policy, never an LLM plan ID.
-result = engine.apply(release['release_id'], approved=True)
+```sh
+onedeploy autodeploy apply --plan /tmp/rollout-plan.json \
+  --source /path/to/application --approve-plan EXACT_PLAN_ID \
+  --state /durable/controller.sqlite --runtime /secure/runtime.json \
+  --policy /secure/policy.json --approve-policy EXACT_POLICY_DIGEST --json
 ```
 
-`qualified_adapter` is an explicit trusted application integration, not an arbitrary module named by configuration. `sdk_adapter` in `onedeploy.autodeploy.daytona` provides concrete Daytona operations using an **isolated `daytona==0.231.0` environment** and verified account identity. Read its signature and [worker protocol](../examples/daytona-gpu-autodeploy/README.md): callers must supply authenticated application qualification/drain callbacks and a live policy enforcing budget, worker count and lifecycle bounds. No implicit SDK upgrade or fallback from existing 0.226.0 occurs.
+The engine verifies account identity, creates/reuses the immutable snapshot, mounts existing model inputs, generates a private worker token, starts the fixed worker process, performs actual checksum/CUDA/model/synthetic qualification, atomically promotes the desired release and drains the previous worker. A negative qualification never promotes. Timeouts preserve pending intent and require read-only reconciliation, not blind retry.
 
-The engine performs snapshot → candidate → qualification → desired-release CAS → old-worker drain/delete. The durable `desired_release` is the routing contract: the integrating stable API must route new jobs from this pointer, lease in-flight jobs, and honor drain admission rules. Updating this record does **not** itself reconfigure Railway, a load balancer or a client URL.
+## 7. Start the stable controller
 
-## Reusable GitHub workflow
+Set `ONEDEPLOY_CONTROLLER_TOKEN` in approved secret storage to a strong value of at least 32 characters. Do not reuse the provider API key. Then run:
 
-`.github/workflows/autodeploy.yml` is opt-in `workflow_call` only. It accepts a trusted deployment branch, full reviewed tooling SHA, tracked application config/Dockerfile/test script, immutable model digest and approved GHCR image destination. It runs only for a push on that exact branch. Fork pull requests cannot deploy through this path.
+```sh
+onedeploy autodeploy serve --config /tmp/autodeploy.json --deployment DEPLOYMENT_ID \
+  --state /durable/controller.sqlite --runtime /secure/runtime.json \
+  --policy /secure/policy.json --approve-policy EXACT_POLICY_DIGEST \
+  --host 127.0.0.1 --port 8766
+```
 
-It tests tooling/application, builds an image from the committed Git archive, pushes a commit-tagged image, resolves its digest, produces a source-bound rollout plan and uploads evidence. It has **no Daytona secret**, does not provision a candidate or promote traffic. Calling it will publish a container to the configured registry and may incur registry/Actions costs, so review before enabling.
+The CLI intentionally binds only loopback. A separately configured TLS reverse proxy/private network is required to connect the existing Railway orchestrator remotely; exposing a public unauthenticated port is not part of this feature. Supervise the controller using the operator's normal service manager. No system service is installed automatically.
 
-Example caller, to be placed in the application repository after review:
+Authenticated `POST /infer` accepts `{"job_id":"stable-id","audio_base64":"..."}` and returns a durable accepted job. Poll authenticated `GET /jobs/stable-id` for completion. The controller bounds request size/queue/concurrency, stores leases and idempotency records, routes only to the desired release, adopts the qualification candidate rather than creating a duplicate, scales up within limits and deletes idle workers. State and audio/transcript payloads stay on the controller's protected local database until retention removes payloads; tombstone IDs/hashes remain to prevent accidental replay.
+
+Default lease expiry produces an uncertain result rather than silently repeating inference. At-least-once retries require explicit library configuration and may duplicate work across workers after a crash. Exactly-once cloud execution is not promised. Worker hard TTL is the final bound if the controller dies; no paused GPU memory is assumed.
+
+## 8. GitHub branch autodeploy
+
+The reusable `.github/workflows/autodeploy.yml` accepts only a trusted push to the selected branch. It tests exact source, builds a commit-tagged image, resolves its immutable digest and records a rollout plan. Application tests run in a separate checkout to preserve source identity. Tooling is pinned by a reviewed full SHA.
+
+By default `enable-rollout: false`: the workflow stops after publishing the image and plan. To enable paid rollout, configure a persistent self-hosted runner labeled `onedeploy-controller`, a protected GitHub environment with required reviewers/policies, and existing host paths outside the checkout:
+
+- `ONEDEPLOY_STATE_PATH`
+- `ONEDEPLOY_RUNTIME_PATH`
+- `ONEDEPLOY_POLICY_PATH`
+- `ONEDEPLOY_POLICY_ID`
+- Environment secret `DAYTONA_API_KEY`
+
+Then explicitly set `enable-rollout: true` and pass the secret to the reusable workflow. The rollout job downloads that run's plan, rechecks exact source and policy, and applies using the durable controller state. It never enables native provider hooks as a side effect. Do not enable this for untrusted PRs; the self-hosted runner executes reviewed tooling only. A failed/unknown apply must be reconciled before rerun.
 
 ```yaml
 name: Prepare GPU release
@@ -94,28 +148,19 @@ jobs:
       deployment-branch: deployment
       tooling-ref: REVIEWED_FULL_COMMIT_SHA
       config: deploy/autodeploy.json
-      dockerfile: deploy/Dockerfile
+      dockerfile: examples/whisper-worker/Dockerfile
       test-script: deploy/test.sh
       model-digest: REVIEWED_MODEL_MANIFEST_SHA256
       image: ghcr.io/your-owner/your-worker
+      enable-rollout: false
 ```
 
-The reviewed test script and Dockerfile execute code. Do not enable this on untrusted branches or grant deployment secrets to PR workflows. An integration must separately verify build provenance, qualified controller policy and the exact artifact before any paid rollout. GitHub artifacts are evidence, not durable controller state or an automatic approval.
+This example still publishes an image if run. Replace markers and review target costs before enabling. The `cuda-base` input optionally supplies a separately reviewed immutable base digest. CPU/native-build, GPU qualification, rollback drills and the Railway forwarding integration remain release gates, not claims made by the source code.
 
-## Build and verification style
+## Operations and library use
 
-Like Ozzy, the build separates lightweight tooling from inference dependencies, creates immutable artifacts and records explicit qualification gaps:
+`status` reads existing state. `reconcile`, `rollback`, and `drain` take an exact release approval plus the matching runtime/policy; drain is safe cleanup of non-desired workers, not a command to delete the active service. Use `Adapter`, `Reconciler`, `StateStore`, `Controller`, `DaytonaPoolTransport` and `PoolPolicy` from their documented modules for embedding. Capability negotiation and the generic rollout protocol are provider-neutral; do not send a Daytona profile to another vendor.
 
-```sh
-python deploy/build_sources.py --output /tmp/onedeploy-release-artifacts
-```
+`python deploy/build_sources.py --output <empty-directory>` builds wheel/sdist, checksums, MIT notices and a development-lock CycloneDX inventory. This is not a complete worker-image SBOM, signed attestation or legal license audit.
 
-Use an empty output directory. This produces wheel/sdist, SHA-256 checksums, MIT notice and a CycloneDX inventory of the pinned development dependencies. This is **not** a complete GPU-image SBOM, license audit or signed provenance attestation. Inference images require their own inspection and model-license review.
-
-See [operations](AUTODEPLOY_OPERATIONS.md), [acceptance](AUTODEPLOY_ACCEPTANCE.md), and the [full design](AUTODEPLOY_PLAN.md).
-
-## Pool and cost planning
-
-`onedeploy.autodeploy.pool` provides deterministic `decide(workers, queued_jobs, budget_remaining, policy)` and `compare_costs(...)` functions. They plan admissions, bounded creation, idle/TTL draining and per-turn versus pooled resource cost using caller-supplied measurements and the **total** hourly resource rate. Busy workers are never proposed for deletion. New capacity is not assumed until deletions are confirmed.
-
-These are advisory decisions, not background jobs or reservations. A trusted persistent controller must atomically reserve budget/capacity, revalidate worker state, execute decisions, monitor deadlines and observe real billing. A cost estimate is not provider pricing or an execution approval.
+See [operations](AUTODEPLOY_OPERATIONS.md), [acceptance](AUTODEPLOY_ACCEPTANCE.md) and [full design](AUTODEPLOY_PLAN.md).

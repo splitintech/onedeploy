@@ -105,3 +105,13 @@ def verify_plan(plan, source):
     if rebuilt != plan:
         raise OnedeployError('stale_plan', 'Source or plan changed; create a fresh plan.')
     return plan
+
+
+def negotiate_capabilities(provider, *, workload, required=(), native_observation=None):
+    """Provider-neutral planning preflight; does not mutate legacy plan digests.
+
+    Registry discovery never authorizes execution. Provider-specific planners
+    must still bind target/account observations and exact reviewed source.
+    """
+    from .capabilities import negotiate
+    return negotiate(provider, workload=workload, required=required, native_observation=native_observation)

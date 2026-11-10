@@ -20,7 +20,7 @@ def test_locked_inventory_and_hashes(tmp_path):
     assert 'not a full deployed GPU-image SBOM' in (tmp_path / 'NOTICE.txt').read_text()
 
 
-def test_reusable_workflow_is_opt_in_and_no_gpu_credentials():
+def test_reusable_workflow_rollout_is_explicit_and_protected():
     import yaml
     text = (ROOT / '.github/workflows/autodeploy.yml').read_text()
     workflow = yaml.safe_load(text)
@@ -29,8 +29,12 @@ def test_reusable_workflow_is_opt_in_and_no_gpu_credentials():
     job = workflow['jobs']['build-plan']
     assert "github.event_name == 'push'" in job['if']
     assert workflow['concurrency']['cancel-in-progress'] is False
-    assert 'DAYTONA_API_KEY' not in text
-    assert 'autodeploy apply' not in text
+    assert triggers['workflow_call']['inputs']['enable-rollout']['default'] is False
+    rollout=workflow['jobs']['rollout']
+    assert 'inputs.enable-rollout' in rollout['if']
+    assert rollout['runs-on']==['self-hosted','onedeploy-controller']
+    assert rollout['environment']=='${{ inputs.deployment-environment }}'
+    assert '--approve-policy' in text and 'autodeploy apply' in text
     assert "plan['id']" in text
     for step in job['steps']:
         if 'uses' in step:

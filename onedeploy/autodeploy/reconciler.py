@@ -52,7 +52,8 @@ class Reconciler:
         if current_check:
             self._current(release)
         # Write intent first: a crash immediately after a remote effect is uncertain.
-        pending = {**release, "pending_operation": operation, "resume_state": release["state"], "state": "needs_reconciliation"}
+        pending = {**release, "pending_operation": operation, "pending_started_at": time.time(),
+                   "resume_state": release["state"], "state": "needs_reconciliation"}
         self.store.save(pending)
         try:
             result = getattr(self.adapter, operation)(release)
@@ -65,11 +66,16 @@ class Reconciler:
         operation = release["pending_operation"]
         out = {**release, "pending_operation": None}
         out.pop("resume_state", None)
+        out.pop("pending_started_at", None)
         if operation in ("ensure_snapshot", "ensure_candidate"):
             if not isinstance(result, str) or not result or len(result) > 200 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_." for c in result):
                 raise OnedeployError("uncertain", "Provider returned an invalid resource identifier.", uncertain=True, mutation_possible=True)
             field, state = (("snapshot_id", "snapshot_ready") if operation == "ensure_snapshot" else ("worker_id", "candidate_ready"))
             out.update({field: result, "state": state})
+            if operation == "ensure_candidate":
+                # Conservatively count the entire provider call against worker TTL.
+                # Read-only recovery preserves this original persisted intent time.
+                out["worker_created_at"] = release.get("pending_started_at", release["created_at"])
         elif operation == "qualify":
             required = ("ready", "gpu", "model_verified", "inference_passed")
             if not isinstance(result, dict) or not all(result.get(k) is True for k in required):

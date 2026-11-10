@@ -400,7 +400,7 @@ def main(argv=None):
         result = dispatch(args)
         output, code = envelope(command, result=result), 0
     except KeyboardInterrupt:
-        output, code = envelope(command, error={"code": "cancelled", "message": "Log polling stopped; the deployment was not stopped." if command == "logs" else "Interrupted. Inspect deployment state before retrying; remote work may still be running.", "retryable": False, "uncertain": command == "deploy", "mutation_possible": command == "deploy"}), 8
+        output, code = envelope(command, error={"code": "cancelled", "message": "Log polling stopped; the deployment was not stopped." if command == "logs" else "Interrupted. Inspect deployment state before retrying; remote work may still be running.", "retryable": False, "uncertain": command in {"deploy", "autodeploy apply", "autodeploy reconcile", "autodeploy rollback", "autodeploy drain", "autodeploy serve"}, "mutation_possible": command in {"deploy", "autodeploy apply", "autodeploy reconcile", "autodeploy rollback", "autodeploy drain", "autodeploy serve"}}), 8
     except UsageError as exc:
         output, code = envelope(command, error={"code": "invalid_config", "message": str(exc), "retryable": False, "uncertain": False, "mutation_possible": False}), 2
     except Exception as exc:
@@ -409,7 +409,7 @@ def main(argv=None):
             output, code = envelope(command, error=resolution_error(exc, command)), exc.exit_code
         else:
             # Never render raw exceptions: provider and OS exceptions can carry secrets.
-            output, code = envelope(command, error={"code": "internal_error", "message": "Operation failed. Inspect configuration and local deployment state before retrying.", "retryable": False, "uncertain": True, "mutation_possible": command == "deploy"}), 1
+            output, code = envelope(command, error={"code": "internal_error", "message": "Operation failed. Inspect configuration and local deployment state before retrying.", "retryable": False, "uncertain": True, "mutation_possible": command in {"deploy", "autodeploy apply", "autodeploy reconcile", "autodeploy rollback", "autodeploy drain", "autodeploy serve"}}), 1
     if machine:
         print(json.dumps(output, sort_keys=True, default=str))
     elif output["error"]:

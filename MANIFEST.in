@@ -5,3 +5,5 @@ recursive-include onedeploy/templates *
 global-exclude __pycache__ *.py[cod]
 
 recursive-include deploy *.py
+
+recursive-include examples *.md *.py Dockerfile requirements.lock worker-control

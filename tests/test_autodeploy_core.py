@@ -179,3 +179,21 @@ def test_inspection_failure_is_sanitized_and_preserves_pending_mutation(engine):
     assert "SECRET-API-TOKEN" not in ''.join(traceback.format_exception(error))
     assert engine.store.get(release["release_id"])["pending_operation"] == "ensure_snapshot"
     assert engine.adapter.calls == ["snapshot"]
+
+
+def test_candidate_created_time_is_intent_time_and_survives_recovery(engine, monkeypatch):
+    import onedeploy.autodeploy.reconciler as module
+    monkeypatch.setattr(module.time, 'time', lambda: 100.0)
+    release = engine.plan(config(), spec())
+    def uncertain_candidate(r):
+        raise TimeoutError()
+    engine.adapter.ensure_candidate = uncertain_candidate
+    with pytest.raises(OnedeployError):
+        engine.apply(release['release_id'], approved=True)
+    pending=engine.store.get(release['release_id'])
+    assert pending['pending_started_at']==100.0
+    monkeypatch.setattr(module.time, 'time', lambda: 300.0)
+    engine.adapter.resolution={'resolved':True,'result':'recovered-worker'}
+    completed=engine.apply(release['release_id'],approved=True)
+    assert completed['worker_created_at']==100.0
+    assert 'pending_started_at' not in completed

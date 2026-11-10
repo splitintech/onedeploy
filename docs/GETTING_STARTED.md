@@ -185,4 +185,4 @@ Creation writes a fresh local project only, not cloud resources. Replace remaini
 
 ## AutoDeploy engineering preview
 
-The `autodeploy` branch adds a separate [GPU release planning and library preview](AUTODEPLOY_QUICKSTART.md). Live CLI rollout remains disabled pending application integration and qualification. Existing deployment flows above are unchanged.
+The `autodeploy` branch adds a separate [GPU release planning and library preview](AUTODEPLOY_QUICKSTART.md). The guarded live CLI/controller and worker are implemented but require explicit runtime/budget approval and have not been live GPU-qualified. Existing deployment flows above are unchanged.

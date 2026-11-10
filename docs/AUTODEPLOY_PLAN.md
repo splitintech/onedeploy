@@ -2,6 +2,10 @@
 
 **Design baseline, 2026-11-10.** The `autodeploy` branch now contains an initial implementation; [acceptance status](AUTODEPLOY_ACCEPTANCE.md) distinguishes tested code from pending live integration. This document retains the full target design and is not a completion claim. OneDeploy remains the project and CLI name. No GPU provisioning, production migration, credential/account changes or main-branch merge has been performed.
 
+## Provider expansion
+
+The [20-provider expansion plan](PROVIDER_EXPANSION_PLAN.md) defines provider-agnostic GitHub branch push→deployment: inspect and use equivalent native integrations, otherwise run OneDeploy-managed releases for qualified deployment capabilities. Exactly one trigger owns each target; vendor-specific stages and unsupported capabilities remain explicit. It also covers model, sandbox, coding-task and workspace boundaries. Daytona GPU is the first specialized profile, not the product boundary. This does not expand the initial Whisper migration or claim those providers are already implemented.
+
 ## Outcome and boundaries
 
 Build an open-source Python library plus the existing `onedeploy` CLI that makes a reviewed merge to a configured deployment branch trigger:
@@ -168,3 +172,11 @@ Offer a reusable library/reusable Actions integration, or invite Daytona to fork
 - [OneDeploy provider contracts](provider-contracts.md) and [security](../SECURITY.md)
 
 Revalidate SDK signatures, quota, pricing, resource defaults, volume/region support, authentication and GPU lifecycle against current documentation before implementing or spending money.
+
+## Product landing and documentation acceptance
+
+The OneDeploy landing is a separate web deliverable in SplitIn's existing `OpenInternalToolsPage` route, not a new browser application inside this Python CLI/TUI repository. It reuses the existing orange animated waitlist background and grain, with the supplied design references informing oversized typography, feature cards, provider connections, privacy/control information and installation CTA. Source implementation is not a claim that the page has been deployed.
+
+Explain the actual architecture: human TUI and agent/noninteractive JSON use one custom orchestration engine over official Railway/Modal CLIs and the Daytona CLI bridge or explicit SDK path. Provider capability checks, credentials, approval and recovery remain visible. Existing experimental adapters must be separated from the additional roadmap vendors; no fabricated deployment or live-qualification claims.
+
+The interactive walkthrough is a safe local simulation, with a human/agent switch and no provider calls or resources. Acceptance includes desktop/mobile layout, keyboard and visible focus behavior, reduced motion, provider switching resetting demo state, repeated click/reset behavior, working copy fallback, bounded animation and no accidental cloud actions. The web PR carries its own test/deployment evidence independently from this library PR.

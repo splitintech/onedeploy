@@ -41,4 +41,7 @@ This is a source-development version, not a registry publication or a live-provi
 - Add explicit isolated Daytona 0.231.0 adapter contracts with account/ownership/resource checks.
 - Add advisory pool/cost policy and opt-in immutable image + plan GitHub workflow.
 - Add Ozzy-style package inventory/checksums and operations/qualification docs.
-- Live CLI rollout, application worker/router integration, background autoscaling and paid provider qualification remain incomplete; no production cutover is implied.
+- Add guarded live CLI rollout, authenticated durable controller/router, leases, bounded autoscaling and immutable runtime/cost-policy approval.
+- Add local-model CUDA Whisper worker, checksummed model-volume contract, candidate adoption, bounded lifetime and conservative allocation reservations.
+- Add capability-aware provider expansion plan; Daytona is the first implemented AutoDeploy profile, not a claim that all vendors support it.
+- Docker image build, paid GPU/provider qualification, production networking and cutover remain unverified; no production cutover is implied.

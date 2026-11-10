@@ -52,7 +52,8 @@ class DaytonaSDKAdapter:
                  deployment: str, resources: dict[str, Any], probe: Callable,
                  drainer: Callable, transport: str = 'sdk', timeout: int = 120,
                  idle_minutes: int = 5, authorize_operation: Callable | None = None,
-                 inspect_status: Callable | None = None):
+                 inspect_status: Callable | None = None, bootstrap: Callable | None = None,
+                 worker_ttl_seconds: int = 300):
         if transport != 'sdk':
             raise DaytonaContractError('AutoDeploy requires explicitly selected SDK transport')
         for name, value in [('account', account), ('deployment', deployment)]:
@@ -73,6 +74,10 @@ class DaytonaSDKAdapter:
         self.timeout, self.idle_minutes = timeout, idle_minutes
         self.authorize_operation = authorize_operation
         self.inspect_status = inspect_status
+        self.bootstrap = bootstrap
+        if type(worker_ttl_seconds) is not int or worker_ttl_seconds < 60 or worker_ttl_seconds % 60:
+            raise DaytonaContractError("Worker lifetime must be positive whole minutes")
+        self.worker_ttl_seconds = worker_ttl_seconds
 
     def _name(self, release_id: str, kind: str) -> str:
         if not isinstance(release_id, str) or not release_id:
@@ -122,7 +127,8 @@ class DaytonaSDKAdapter:
             params = self.bindings.sandbox_params(name=name, snapshot=snapshot_id,
                 resources=dict(self.resources), labels=self._labels(release_id), public=False,
                 env_vars={'ONEDEPLOY_RELEASE_ID': release_id, 'ONEDEPLOY_MODEL_DIGEST': model_digest},
-                auto_stop_interval=self.idle_minutes, auto_delete_interval=0)
+                auto_stop_interval=self.idle_minutes, auto_delete_interval=0,
+                ttl_minutes=self.worker_ttl_seconds // 60)
             worker = self.client.create(params, timeout=self.timeout)
         worker = self._owned_worker(worker.id, release_id)
         if worker.name != name or worker.snapshot != snapshot_id:
@@ -185,7 +191,10 @@ class DaytonaSDKAdapter:
     def ensure_candidate(self, release: dict[str, Any]) -> str:
         self._release(release)
         self._admission(release)
-        return self._ensure_candidate(release['release_id'], release['snapshot_id'], release['spec']['model_digest'])
+        worker_id = self._ensure_candidate(release['release_id'], release['snapshot_id'], release['spec']['model_digest'])
+        if self.bootstrap is not None:
+            self.bootstrap(self._owned_worker(worker_id, release['release_id']), release)
+        return worker_id
 
     def qualify(self, release: dict[str, Any]) -> dict[str, Any]:
         self._release(release)
@@ -255,7 +264,8 @@ class DaytonaSDKAdapter:
 def sdk_adapter(*, account: str, deployment: str, resources: dict[str, Any],
                 probe: Callable, drainer: Callable, api_key: str,
                 timeout: int = 120, idle_minutes: int = 5,
-                authorize_operation: Callable, inspect_status: Callable | None = None) -> DaytonaSDKAdapter:
+                authorize_operation: Callable, inspect_status: Callable | None = None,
+                bootstrap: Callable | None = None, worker_ttl_seconds: int = 300) -> DaytonaSDKAdapter:
     """Explicit live SDK factory. Caller must authorize the exact deployment.
 
     Requires a separate environment with daytona==0.231.0; do not upgrade the
@@ -290,7 +300,8 @@ def sdk_adapter(*, account: str, deployment: str, resources: dict[str, Any],
     bindings = SDKBindings(snapshot_params, sandbox_params, DaytonaNotFoundError, '0.231.0')
     client = Daytona(DaytonaConfig(api_key=api_key, api_url='https://app.daytona.io/api'))
     return DaytonaSDKAdapter(client, bindings, account=account, deployment=deployment,
-        resources=resources, probe=probe, drainer=drainer, timeout=timeout, idle_minutes=idle_minutes, authorize_operation=authorize_operation, inspect_status=inspect_status)
+        resources=resources, probe=probe, drainer=drainer, timeout=timeout, idle_minutes=idle_minutes, authorize_operation=authorize_operation, inspect_status=inspect_status,
+        bootstrap=bootstrap, worker_ttl_seconds=worker_ttl_seconds)
 
 
 def worker_control(worker: Any, action: str) -> dict[str, Any]:
@@ -301,7 +312,7 @@ def worker_control(worker: Any, action: str) -> dict[str, Any]:
     in user configuration. A missing/broken command is a qualification failure.
     """
     import json
-    if action not in {'qualify', 'drain'}:
+    if action not in {'qualify', 'drain', 'qualify-status', 'drain-status'}:
         raise DaytonaContractError('Unsupported worker control action')
     result = worker.process.exec('/opt/onedeploy/worker-control ' + action + ' --json', timeout=90)
     if result.exit_code != 0 or not isinstance(result.result, str) or len(result.result) > 16384:

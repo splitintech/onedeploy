@@ -1,0 +1,181 @@
+import json
+import sqlite3
+from types import SimpleNamespace as Obj
+import pytest
+
+from onedeploy.autodeploy.daytona import DaytonaSDKAdapter, SDKBindings, DaytonaContractError
+from onedeploy.autodeploy.transport import DaytonaPoolTransport, RuntimeConfig, TOKEN
+
+RID='a'*64
+IMAGE='ghcr.io/example/worker@sha256:'+'b'*64
+RUNTIME=dict(schema_version=1,model_volume_id='models',model_subpath='revision1',model_directory='model',
+             model_manifest='manifest.json',synthetic_audio='test.wav',synthetic_text='Hello world')
+
+class Missing(Exception): pass
+
+class Ledger:
+    def __init__(self,path): self.path=path;self.retired=[]
+    def connect(self): return sqlite3.connect(self.path)
+    def retire(self,allocation): self.retired.append(allocation)
+
+class Client:
+    def __init__(self):
+        self.workers={};self.commands=[];self.files={};self.creates=[];self.deleted=[]
+        self.volume=Obj(get=lambda *a,**k:Obj(organization_id='account',state='ready'))
+        self.snapshot=Obj(get=lambda *a,**k:Obj(organization_id='account',state='ready',image_name=IMAGE,cpu=2,mem=8,disk=20,gpu=1))
+        self.evidence=dict(authenticated=True,cuda_available=True,model_on_gpu=True,checksum_verified=True,
+                           synthetic_inference_passed=True,release_id=RID,model_digest='c'*64,gpu_type='h100')
+        self.qualified=False;self.qualifying=False;self.active=0
+    def get(self,name,request_timeout=None):
+        if name not in self.workers: raise Missing()
+        return self.workers[name]
+    def exec(self,command,timeout):
+        self.commands.append(command)
+        if command.startswith('chmod '): return Obj(exit_code=0,result='')
+        if 'qualify-status' in command:
+            result={'completed':self.qualified,'in_progress':self.qualifying,'evidence':self.evidence if self.qualified else None}
+        elif 'qualify ' in command:
+            self.qualified=True;result=self.evidence
+        elif 'drain' in command: result={'accepting_jobs':False,'active_jobs':self.active}
+        elif 'infer' in command:
+            path=command.split('--input ')[1].split(' ')[0]
+            payload=json.loads(self.files[path]);result={'job_id':payload['job_id'],'text':'Hello world','release_id':RID}
+        else: raise AssertionError(command)
+        return Obj(exit_code=0,result=json.dumps(result))
+    def create(self,params,timeout):
+        self.creates.append(params)
+        worker=Obj(id='worker1',name=params['name'],snapshot=params['snapshot'],organization_id='account',
+                   labels=params['labels'],public=False,state='started')
+        worker.process=Obj(exec=self.exec,create_session=lambda *a,**k:None,execute_session_command=lambda *a,**k:None)
+        worker.fs=Obj(upload_file=lambda data,path,**k:self.files.__setitem__(path,data),delete_file=lambda path,**k:self.files.pop(path,None))
+        self.workers[worker.id]=self.workers[worker.name]=worker
+        return worker
+    def delete(self,worker,timeout):
+        self.deleted.append(worker.id);self.workers.pop(worker.id);self.workers.pop(worker.name)
+
+
+def fixture(tmp_path):
+    client=Client()
+    adapter=DaytonaSDKAdapter(client,SDKBindings(lambda **kw:kw,lambda **kw:kw,Missing,'0.231.0'),
+        account='account',deployment='demo',resources=dict(cpu=2,memory=8,disk=20,gpu=1,gpu_type='h100'),
+        probe=lambda w:client.evidence,drainer=lambda w:{'accepting_jobs':False,'active_jobs':0},authorize_operation=lambda r:True)
+    ledger=Ledger(tmp_path/'ledger.sqlite')
+    transport=DaytonaPoolTransport(adapter,RUNTIME,worker_ttl_seconds=600,ledger=ledger,
+        volume_type=lambda **kw:kw,session_request_type=lambda **kw:kw)
+    release=dict(release_id=RID,deployment_id='demo',snapshot_id='snapshot',config=dict(target='account',resources=dict(cpu=2,memory_gib=8,disk_gib=20,gpu_count=1,gpu_type='h100'),candidate_timeout_seconds=10),
+                 spec=dict(image_digest=IMAGE,model_digest='c'*64))
+    return transport,client,release,ledger
+
+
+def test_create_mount_bootstrap_and_hard_ttl(tmp_path):
+    transport,client,release,ledger=fixture(tmp_path)
+    assert transport.create(release,'slot1')=='worker1'
+    params=client.creates[0]
+    assert params['ttl_minutes']==10 and params['auto_stop_interval']==0
+    assert params['volumes'][0]['volume_id']=='models'
+    assert params['env_vars']['ONEDEPLOY_MODEL_DIR'].endswith('/model')
+    assert len(client.files[TOKEN])>=32
+    assert all(client.files[TOKEN].decode() not in command for command in client.commands)
+    assert transport.inspect_create(release,'slot1')=='worker1'
+    assert transport.create(release,'slot1')=='worker1'
+    assert len(client.creates)==1
+
+
+def test_inference_payload_is_file_not_command_and_deleted(tmp_path):
+    transport,client,release,_=fixture(tmp_path);worker=transport.create(release,'slot1')
+    result=transport.infer(worker,release,{'job_id':'job1','audio_base64':'c2VjcmV0'})
+    assert result['text']=='Hello world'
+    assert all('c2VjcmV0' not in command for command in client.commands)
+    assert list(client.files)==[TOKEN]
+
+
+def test_qualification_receipt_prevents_repeat(tmp_path):
+    transport,client,release,_=fixture(tmp_path);worker=transport.create(release,'slot1')
+    assert transport.qualify(worker,release) is True
+    assert transport.qualify(worker,release) is True
+    assert sum('qualify --json' in command for command in client.commands)==1
+    client.qualified=False;client.qualifying=True
+    assert transport.qualify(worker,release) is False
+    assert sum('qualify --json' in command for command in client.commands)==1
+
+
+def test_confirmed_delete_retires_capacity_not_budget(tmp_path):
+    transport,client,release,ledger=fixture(tmp_path);worker=transport.create(release,'slot1')
+    allocation=client.workers[worker].labels['onedeploy-allocation']
+    client.active=1
+    with pytest.raises(DaytonaContractError):transport.delete(worker,release)
+    assert not ledger.retired
+    client.active=0;transport.delete(worker,release)
+    assert ledger.retired==[allocation]
+    transport.delete(worker,release)
+    assert ledger.retired==[allocation,allocation]
+
+
+def test_foreign_volume_and_runtime_block(tmp_path):
+    transport,client,release,_=fixture(tmp_path)
+    client.volume=Obj(get=lambda *a,**k:Obj(organization_id='other',state='ready'))
+    with pytest.raises(DaytonaContractError):transport.create(release,'slot1')
+    assert not client.creates
+    with pytest.raises(DaytonaContractError):RuntimeConfig.from_dict({**RUNTIME,'model_manifest':'../secret'})
+    with pytest.raises(DaytonaContractError):RuntimeConfig.from_dict({**RUNTIME,'model_manifest':'model/manifest.json'})
+
+
+def test_wrong_runtime_cannot_infer_or_delete(tmp_path):
+    transport,client,release,_=fixture(tmp_path);worker=transport.create(release,'slot1')
+    client.workers[worker].labels['onedeploy-runtime']='wrong'
+    with pytest.raises(DaytonaContractError):transport.infer(worker,release,{'job_id':'j','audio_base64':'eA=='})
+    with pytest.raises(DaytonaContractError):transport.delete(worker,release)
+    assert not client.deleted
+
+
+def test_rollout_candidate_is_adopted_and_routes_job_end_to_end(tmp_path):
+    import base64,time
+    from onedeploy.autodeploy.state import StateStore
+    from onedeploy.autodeploy.reconciler import Reconciler
+    from onedeploy.autodeploy.controller import Controller
+    from onedeploy.autodeploy.pool import PoolPolicy
+    transport,client,_,_=fixture(tmp_path)
+    transport.adapter.ensure_snapshot=lambda release:'snapshot'
+    store=StateStore(tmp_path/'controller.sqlite')
+    engine=Reconciler(store,transport.release_adapter())
+    release=engine.plan(dict(deployment_id='demo',repository='example/app',branch='deployment',target='account',
+        resources=dict(cpu=2,memory_gib=8,disk_gib=20,gpu_count=1,gpu_type='h100'),max_workers=2,budget_usd=10,candidate_timeout_seconds=10),
+        dict(source_commit='d'*40,image_digest=IMAGE,model_digest='c'*64,evidence_digest='e'*64))
+    client.evidence['release_id']=release['release_id']
+    # Test fake worker response identity follows the actual generated release.
+    original=client.exec
+    def execute(command,timeout):
+        reply=original(command,timeout)
+        if 'infer' in command:
+            result=json.loads(reply.result);result['release_id']=release['release_id'];reply.result=json.dumps(result)
+        return reply
+    client.exec=execute
+    assert engine.apply(release['release_id'],approved=True)['state']=='complete'
+    policy=PoolPolicy(2,1,60,600,10,30,1)
+    controller=Controller(store,'demo',transport,policy,10)
+    try:
+        controller.submit({'job_id':'integration','audio_base64':base64.b64encode(b'audio').decode()})
+        for _ in range(30):
+            controller.tick()
+            if controller.get_job('integration')['state']=='done':break
+            time.sleep(.01)
+        assert controller.get_job('integration')['result']['text']=='Hello world'
+        assert len(client.creates)==1 # No duplicate pool candidate.
+    finally:controller.close()
+
+
+def test_resource_drift_blocks_pool_allocation(tmp_path):
+    transport,client,release,_=fixture(tmp_path)
+    client.snapshot=Obj(get=lambda *a,**k:Obj(organization_id='account',state='ready',image_name=IMAGE,cpu=64,mem=8,disk=20,gpu=1))
+    with pytest.raises(DaytonaContractError):transport.create(release,'slot1')
+    assert not client.creates
+
+
+def test_recovery_rejects_changed_runtime(tmp_path):
+    transport,client,release,_=fixture(tmp_path)
+    worker=transport.create(release,'candidate')
+    release['worker_id']=worker
+    client.workers[worker].labels['onedeploy-runtime']='wrong'
+    for operation in ('qualify','drain','delete_worker'):
+        with pytest.raises(DaytonaContractError):
+            transport.release_adapter().inspect_operation(release,operation)
