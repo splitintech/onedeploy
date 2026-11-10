@@ -94,6 +94,8 @@ def parser():
                 c.add_argument("--" + field)
             c.add_argument("--template", choices=["docker-http", "asgi", "worker", "model"])
             c.add_argument("--directory", default=".")
+    from .autodeploy.cli import register
+    register(sub)
     return p
 
 
@@ -279,6 +281,9 @@ def follow_logs(args):
 def dispatch(args):
     from . import config, core
     cmd = args.command
+    if cmd == "autodeploy":
+        from .autodeploy.cli import dispatch as autodeploy_dispatch
+        return autodeploy_dispatch(args)
     if cmd == "init":
         if args.provider:
             targets = {key: getattr(args, key.replace("-", "_")) for key in ("account", "project", "environment", "service", "sandbox", "app", "function", "snapshot-name")}
@@ -389,6 +394,8 @@ def main(argv=None):
     try:
         args = parser().parse_args(argv)
         command = args.command + (" validate" if args.command == "config" else "")
+        if args.command == "autodeploy":
+            command += " " + args.autodeploy_action
         machine = args.json
         result = dispatch(args)
         output, code = envelope(command, result=result), 0

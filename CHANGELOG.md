@@ -32,3 +32,13 @@ Initial experimental implementation of the approved Onedeploy plan:
 - Generic examples, package metadata, offline CI and regression tests.
 
 This is a source-development version, not a registry publication or a live-provider certification. The verification report records exact checks and remaining operator qualification. No production resources, credentials, migrations or application sends were exercised while implementing this release.
+
+
+## AutoDeploy preview (unreleased)
+
+- Add strict source-bound GPU release planning and JSON CLI preview.
+- Add durable single-host rollout state, CAS promotion, uncertainty recovery, rollback and safe candidate cleanup.
+- Add explicit isolated Daytona 0.231.0 adapter contracts with account/ownership/resource checks.
+- Add advisory pool/cost policy and opt-in immutable image + plan GitHub workflow.
+- Add Ozzy-style package inventory/checksums and operations/qualification docs.
+- Live CLI rollout, application worker/router integration, background autoscaling and paid provider qualification remain incomplete; no production cutover is implied.

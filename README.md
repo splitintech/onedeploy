@@ -1,6 +1,6 @@
 # onedeploy
 
-> **AutoDeploy proposal:** This branch contains the [Daytona GPU autodeploy implementation plan](docs/AUTODEPLOY_PLAN.md), including the library/CLI design, Ozzy-style build and README requirements, rollout, cost controls and acceptance gates. The new feature is **planned, not implemented or enabled**; existing documentation below describes the current tool.
+> **AutoDeploy engineering preview:** This branch implements [source-bound plans, a rollout library and image-build workflow](docs/AUTODEPLOY_QUICKSTART.md). Live CLI GPU rollout remains capability-gated pending authenticated application routing, spending-policy integration and paid provider qualification. See [acceptance status](docs/AUTODEPLOY_ACCEPTANCE.md) and the [full plan](docs/AUTODEPLOY_PLAN.md). Existing OneDeploy functionality below is unchanged.
 
 A local, plan-first deployment tool for humans and agents using supported Railway, Daytona and Modal workflows. No LLM account or hosted Onedeploy service is required.
 

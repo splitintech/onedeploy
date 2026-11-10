@@ -1,6 +1,6 @@
 # OneDeploy AutoDeploy: implementation plan
 
-**Status: proposal only, 2026-11-10.** This branch adds a plan, not a working deployment controller, released library, enabled GitHub workflow, or provisioned GPU. Implementation branch: `autodeploy`. OneDeploy remains the project and CLI name. No production migration, credentials, account settings or main-branch merge is part of this documentation change.
+**Design baseline, 2026-11-10.** The `autodeploy` branch now contains an initial implementation; [acceptance status](AUTODEPLOY_ACCEPTANCE.md) distinguishes tested code from pending live integration. This document retains the full target design and is not a completion claim. OneDeploy remains the project and CLI name. No GPU provisioning, production migration, credential/account changes or main-branch merge has been performed.
 
 ## Outcome and boundaries
 
