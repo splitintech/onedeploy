@@ -32,3 +32,23 @@ Initial experimental implementation of the approved Onedeploy plan:
 - Generic examples, package metadata, offline CI and regression tests.
 
 This is a source-development version, not a registry publication or a live-provider certification. The verification report records exact checks and remaining operator qualification. No production resources, credentials, migrations or application sends were exercised while implementing this release.
+
+
+## AutoDeploy preview (unreleased)
+
+- Add strict source-bound GPU release planning and JSON CLI preview.
+- Add durable single-host rollout state, CAS promotion, uncertainty recovery, rollback and safe candidate cleanup.
+- Add explicit isolated Daytona 0.231.0 adapter contracts with account/ownership/resource checks.
+- Add advisory pool/cost policy and opt-in immutable image + plan GitHub workflow.
+- Add Ozzy-style package inventory/checksums and operations/qualification docs.
+- Add guarded live CLI rollout, authenticated durable controller/router, leases, bounded autoscaling and immutable runtime/cost-policy approval.
+- Add local-model CUDA Whisper worker, checksummed model-volume contract, candidate adoption, bounded lifetime and conservative allocation reservations.
+- Add capability-aware provider expansion plan; Daytona is the first implemented AutoDeploy profile, not a claim that all vendors support it.
+- Docker image build, paid GPU/provider qualification, production networking and cutover remain unverified; no production cutover is implied.
+
+### Timeout and finite-lifetime safety
+
+- Cancel timed-out dedicated AutoDeploy workers at the sandbox boundary, fence late results and verify destruction before capacity release. Uncertain deletion stays pending; finite provider TTL remains the fallback.
+- Quarantine timed-out startup/creation releases to prevent automatic replacement spending loops; keep healthy workers serving without replaying timed-out jobs.
+- Require confirmed finite expiration and exact ownership before operation; shared volumes and preexisting/shared sandbox workloads are not destroyed by guessed cleanup.
+- Generic Daytona contracts are now `3-cli-ttl` / `3-sdk-ttl`, with finite 15-minute default TTL and 1–1440-minute reviewed override. Recreate older plans. Human and Codex/agent OneDeploy callers use the same policy.

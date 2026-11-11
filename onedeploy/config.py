@@ -52,7 +52,7 @@ def schema():
             "timeout":{"type":"integer","minimum":1,"maximum":3600}}),
         "variables":{"type":"object","propertyNames":{"pattern":KEY.pattern},"additionalProperties":variable,"maxProperties":128},
         "target":_object({**{k:identifier for k in ["account","project","environment","service","sandbox","snapshot","region","app","function"]}, "mode":{"enum":["create","existing"]}, "transport":{"enum":["cli","sdk"]}},["account"]),
-        "resources":_object({k:{"type":"integer","minimum":0,"maximum":1048576} for k in ["cpu","memory_mb","disk_gb","auto_stop_minutes"]}),
+        "resources":_object({**{k:{"type":"integer","minimum":0,"maximum":1048576} for k in ["cpu","memory_mb","disk_gb","auto_stop_minutes"]}, "ttl_minutes":{"type":"integer","minimum":1,"maximum":1440}}),
         "ingress":_object({"mode":{"enum":["private","existing"]}}),
         "storage":{"type":"array","maxItems":16,"items":_object({
             "name":identifier,"resource_id":identifier,"mount_path":{"type":"string","pattern":"^/","maxLength":1024},

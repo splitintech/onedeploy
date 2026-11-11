@@ -1,8 +1,32 @@
 # onedeploy
 
+> **AutoDeploy engineering preview:** This branch adds [source-bound plans, a durable rollout/controller library, an executable Whisper worker and guarded GitHub release workflows](docs/AUTODEPLOY_QUICKSTART.md). Local tests do not establish live GPU qualification. [Acceptance status](docs/AUTODEPLOY_ACCEPTANCE.md) separates implemented features from unrun cloud tests; [provider expansion](docs/PROVIDER_EXPANSION_PLAN.md) keeps planned vendors distinct from supported adapters.
+
 A local, plan-first deployment tool for humans and agents using supported Railway, Daytona and Modal workflows. No LLM account or hosted Onedeploy service is required.
 
 **Experimental and opt-in.** The new three-step wizard and project-discovery CLI are an experimental increment, not a universal importer or live-provider certification. The manifest workflow remains available. See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [acceptance evidence](docs/UX_ACCEPTANCE.md) for implemented, tested and pending work.
+
+## One interface over official provider tooling
+
+OneDeploy is a custom orchestration layer, not a replacement cloud or a collection of aliased commands:
+
+```text
+Human terminal UI                 Agent/noninteractive JSON CLI
+            \                      /
+          shared discovery → validation → source-bound plan → explicit approval
+                                    |
+               official provider tooling through scoped adapters
+             Railway CLI · Modal CLI · Daytona CLI / explicit SDK
+```
+
+- **Humans:** the opt-in three-step terminal UI discovers a project, explains supported targets and lets you review the exact operations before deployment.
+- **Agents/scripts:** use the same engine through noninteractive commands and versioned JSON results. Reading a plan ID is not authorization.
+- **Existing adapters:** Railway uses official `railway` commands; Modal uses official `modal` commands; Daytona defaults to its installed CLI bridge with an existing local login, or an explicitly selected SDK environment where required. OneDeploy adds intent validation, capability checks, source/target binding, approval gates and recovery rather than bypassing the official tools.
+- **Credentials:** existing provider authentication stays with its tools/session; separate SDK/API paths require their documented credentials. There is no OneDeploy hosted credential account. Secrets must not be pasted into command arguments, plans, source or screenshots.
+- **AutoDeploy:** a provider-neutral capability contract chooses native Git deployment where verified and avoids duplicate triggers; qualified custom adapters handle targets without an equivalent native flow. The current custom implementation is Daytona GPU-first. Other requested vendors are tracked as planned/held, not declared working because a CLI command exists.
+- **Qualification:** the repository is experimental. Offline tests and command recognition do not certify a provider account, deployment, GPU workload, cost or production migration.
+
+See [provider contracts](docs/provider-contracts.md), [agent CLI](docs/AGENT_CLI.md), [AutoDeploy](docs/AUTODEPLOY_QUICKSTART.md) and [provider roadmap](docs/PROVIDER_EXPANSION_PLAN.md).
 
 ## Install from a reviewed checkout
 

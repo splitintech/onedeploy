@@ -1,0 +1,254 @@
+# Reusable, opt-in pipeline. Paid rollout is disabled unless explicitly enabled.
+# A protected environment and persistent self-hosted controller are required.
+name: AutoDeploy immutable image and guarded rollout
+on:
+  workflow_call:
+    inputs:
+      enable-rollout:
+        description: Explicitly enable paid rollout on the approved persistent controller
+        type: boolean
+        default: false
+      deployment-environment:
+        description: Protected GitHub environment with approved controller policy paths
+        type: string
+        default: onedeploy-gpu
+      deployment-branch:
+        required: true
+        type: string
+      tooling-ref:
+        description: Reviewed full OneDeploy commit SHA
+        required: true
+        type: string
+      cuda-base:
+        description: Optional approved immutable CUDA base image for the supplied Whisper Dockerfile
+        type: string
+        default: ''
+      config:
+        description: Tracked application-relative AutoDeploy configuration
+        required: true
+        type: string
+      dockerfile:
+        required: true
+        type: string
+      test-script:
+        description: Tracked application-relative trusted test script
+        required: true
+        type: string
+      model-digest:
+        required: true
+        type: string
+      image:
+        description: Lowercase ghcr.io namespace/name without a tag
+        required: true
+        type: string
+    secrets:
+      DAYTONA_API_KEY:
+        required: false
+    outputs:
+      image-digest:
+        value: ${{ jobs.build-plan.outputs.image-digest }}
+      plan-id:
+        value: ${{ jobs.build-plan.outputs.plan-id }}
+permissions:
+  contents: read
+concurrency:
+  group: onedeploy-${{ github.repository }}-${{ inputs.deployment-branch }}
+  cancel-in-progress: false
+jobs:
+  build-plan:
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', inputs.deployment-branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-digest: ${{ steps.image.outputs.digest }}
+      plan-id: ${{ steps.plan.outputs.id }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: application
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate caller-controlled fields without shell interpolation
+        env:
+          TOOLING_REF: ${{ inputs.tooling-ref }}
+          CONFIG_PATH: ${{ inputs.config }}
+          DOCKERFILE_PATH: ${{ inputs.dockerfile }}
+          TEST_SCRIPT_PATH: ${{ inputs.test-script }}
+          IMAGE: ${{ inputs.image }}
+          MODEL_DIGEST: ${{ inputs.model-digest }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, subprocess
+          assert re.fullmatch(r'[0-9a-f]{40}', os.environ['TOOLING_REF'])
+          assert re.fullmatch(r'[0-9a-f]{64}', os.environ['MODEL_DIGEST'])
+          assert re.fullmatch(r'ghcr\.io/[a-z0-9_.-]+/[a-z0-9_./-]+', os.environ['IMAGE'])
+          root = pathlib.Path('application').resolve()
+          for key in ('CONFIG_PATH', 'DOCKERFILE_PATH', 'TEST_SCRIPT_PATH'):
+              rel = pathlib.Path(os.environ[key])
+              assert not rel.is_absolute() and '..' not in rel.parts
+              path = root / rel
+              assert path.is_file() and not path.is_symlink()
+              assert path.resolve().is_relative_to(root)
+              subprocess.run(['git','-C',str(root),'ls-files','--error-unmatch','--',str(rel)], check=True)
+          PY
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: splitintech/onedeploy
+          ref: ${{ inputs.tooling-ref }}
+          path: tooling
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Build and test reviewed tooling
+        working-directory: tooling
+        run: |
+          python -m pip install -r requirements-dev.lock
+          python -m pip install --no-deps -e .
+          python -m pytest -q
+          python deploy/build_sources.py --output "$RUNNER_TEMP/onedeploy-source"
+      - name: Run trusted application tests in an isolated checkout
+        env:
+          TEST_SCRIPT: ${{ inputs.test-script }}
+        run: |
+          set -euo pipefail
+          git clone --no-hardlinks application "$RUNNER_TEMP/application-tests"
+          git -C "$RUNNER_TEMP/application-tests" checkout --detach "$GITHUB_SHA"
+          cd "$RUNNER_TEMP/application-tests"
+          bash -- "$TEST_SCRIPT"
+      - name: Record source evidence
+        env:
+          MODEL_DIGEST: ${{ inputs.model-digest }}
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,pathlib
+          record = {'source_commit':os.environ['GITHUB_SHA'], 'repository':os.environ['GITHUB_REPOSITORY'],
+                    'run_id':os.environ['GITHUB_RUN_ID'], 'model_digest':os.environ['MODEL_DIGEST'],
+                    'tests':'passed', 'gpu_qualified':False}
+          raw=json.dumps(record,sort_keys=True).encode()
+          pathlib.Path(os.environ['RUNNER_TEMP'],'evidence.json').write_bytes(raw)
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write('EVIDENCE_DIGEST='+hashlib.sha256(raw).hexdigest()+'\n')
+          PY
+      - name: Build immutable source image
+        working-directory: application
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          IMAGE: ${{ inputs.image }}
+          CUDA_BASE: ${{ inputs.cuda-base }}
+        run: |
+          set -euo pipefail
+          python - <<'PYCODE'
+          import os,re
+          value=os.environ.get('CUDA_BASE','')
+          assert not value or re.fullmatch(r'[A-Za-z0-9._:/-]+@sha256:[0-9a-f]{64}',value)
+          PYCODE
+          mkdir "$RUNNER_TEMP/build-context"
+          git archive "$GITHUB_SHA" | tar -x -C "$RUNNER_TEMP/build-context"
+          args=()
+          if [ -n "$CUDA_BASE" ]; then args+=(--build-arg "CUDA_BASE=$CUDA_BASE"); fi
+          docker build "${args[@]}" --file "$RUNNER_TEMP/build-context/$DOCKERFILE" --tag "$IMAGE:$GITHUB_SHA" "$RUNNER_TEMP/build-context"
+      - name: Publish image and retain immutable digest
+        id: image
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-auth"
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true; rm -rf "$DOCKER_CONFIG"' EXIT
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker image inspect "$IMAGE:$GITHUB_SHA" --format '{{json .RepoDigests}}' > "$RUNNER_TEMP/image-digests.json"
+          python - <<'PY'
+          import json,os,pathlib,re
+          refs=json.loads(pathlib.Path(os.environ['RUNNER_TEMP'],'image-digests.json').read_text())
+          refs=[r for r in refs if r.startswith(os.environ['IMAGE']+'@sha256:') and re.fullmatch(r'.+@sha256:[0-9a-f]{64}',r)]
+          assert len(refs)==1
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write('digest='+refs[0]+'\n')
+          PY
+      - name: Create non-executable source-bound rollout plan
+        id: plan
+        env:
+          CONFIG_PATH: ${{ inputs.config }}
+          MODEL_DIGEST: ${{ inputs.model-digest }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          onedeploy autodeploy plan --config "application/$CONFIG_PATH" --source application --commit "$GITHUB_SHA" --image "$IMAGE_DIGEST" --model-digest "$MODEL_DIGEST" --evidence-digest "$EVIDENCE_DIGEST" --out "$RUNNER_TEMP/rollout-plan.json" --json > "$RUNNER_TEMP/plan-result.json"
+          python - <<'PY'
+          import json,os,pathlib
+          plan=json.loads(pathlib.Path(os.environ['RUNNER_TEMP'],'rollout-plan.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write('id='+plan['id']+'\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: onedeploy-plan-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/rollout-plan.json
+            ${{ runner.temp }}/evidence.json
+            ${{ runner.temp }}/onedeploy-source/
+          if-no-files-found: error
+          retention-days: 14
+
+  rollout:
+    needs: build-plan
+    if: inputs.enable-rollout && github.event_name == 'push' && github.ref == format('refs/heads/{0}', inputs.deployment-branch)
+    runs-on: [self-hosted, onedeploy-controller]
+    environment: ${{ inputs.deployment-environment }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: application
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: splitintech/onedeploy
+          ref: ${{ inputs.tooling-ref }}
+          path: tooling
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: onedeploy-plan-${{ github.sha }}
+          path: ${{ runner.temp }}/approved-artifacts
+      - name: Install isolated reviewed controller tooling
+        working-directory: tooling
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/autodeploy-runtime"
+          "$RUNNER_TEMP/autodeploy-runtime/bin/python" -m pip install -r requirements-dev.lock
+          "$RUNNER_TEMP/autodeploy-runtime/bin/python" -m pip install --no-deps .
+          "$RUNNER_TEMP/autodeploy-runtime/bin/python" -m pip install 'daytona==0.231.0'
+      - name: Apply only the exact source and protected-environment policy
+        env:
+          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
+          ONEDEPLOY_STATE_PATH: ${{ vars.ONEDEPLOY_STATE_PATH }}
+          ONEDEPLOY_RUNTIME_PATH: ${{ vars.ONEDEPLOY_RUNTIME_PATH }}
+          ONEDEPLOY_POLICY_PATH: ${{ vars.ONEDEPLOY_POLICY_PATH }}
+          ONEDEPLOY_POLICY_ID: ${{ vars.ONEDEPLOY_POLICY_ID }}
+          PLAN_ID: ${{ needs.build-plan.outputs.plan-id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCODE'
+          import os,pathlib,re
+          assert os.environ.get('DAYTONA_API_KEY')
+          assert re.fullmatch(r'[0-9a-f]{64}',os.environ['ONEDEPLOY_POLICY_ID'])
+          assert re.fullmatch(r'[0-9a-f]{64}',os.environ['PLAN_ID'])
+          workspace=pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve()
+          for key in ('ONEDEPLOY_STATE_PATH','ONEDEPLOY_RUNTIME_PATH','ONEDEPLOY_POLICY_PATH'):
+              p=pathlib.Path(os.environ[key])
+              assert p.is_absolute() and not p.is_symlink() and not p.resolve().is_relative_to(workspace)
+          PYCODE
+          "$RUNNER_TEMP/autodeploy-runtime/bin/onedeploy" autodeploy apply \
+            --plan "$RUNNER_TEMP/approved-artifacts/rollout-plan.json" \
+            --source application --approve-plan "$PLAN_ID" \
+            --state "$ONEDEPLOY_STATE_PATH" --runtime "$ONEDEPLOY_RUNTIME_PATH" \
+            --policy "$ONEDEPLOY_POLICY_PATH" --approve-policy "$ONEDEPLOY_POLICY_ID" --json

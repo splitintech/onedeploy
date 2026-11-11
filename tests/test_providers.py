@@ -125,7 +125,7 @@ class Missing(Exception): pass
 
 def sandbox(**overrides):
     return SimpleNamespace(id='sb-id',name='sandbox',organization_id='org',state='started',
-                           snapshot='snap',public=False,auto_stop_interval=15,**overrides)
+                           snapshot='snap',public=False,auto_stop_interval=15,auto_destroy_at=(__import__('datetime').datetime.now(__import__('datetime').timezone.utc)+__import__('datetime').timedelta(minutes=15)).isoformat(),**overrides)
 
 
 def test_daytona_real_sdk_construction_private_secret_runtime_and_absence():
@@ -139,7 +139,8 @@ def test_daytona_real_sdk_construction_private_secret_runtime_and_absence():
     assert calls==[]
     result=daytona_bridge.execute('create',config,{'API_KEY':'synthetic-secret'},client,Missing,SimpleNamespace)
     assert calls[0][0].env_vars=={'API_KEY':'synthetic-secret'}
-    assert calls[0][0].public is False and calls[0][0].auto_delete_interval == -1
+    assert calls[0][0].public is False and calls[0][0].auto_delete_interval == 0
+    assert calls[0][0].ttl_minutes == 15
     assert calls[0][0].target == 'us'
     assert 'synthetic-secret' not in json.dumps(result)
     assert result['readiness_verified'] is False
@@ -537,3 +538,35 @@ def test_daytona_external_ready_url_rejected():
 @pytest.mark.parametrize('provider',['railway','modal'])
 def test_non_daytona_port_semantics_are_explicit_capabilities(provider):
     assert 'does not configure or verify' in get_adapter(provider).capabilities['listener_port']
+
+
+def test_sdk_timeout_create_immediately_deletes_exact_lease():
+    state={};deleted=[]
+    def get(name,**kw):
+        if 'worker' not in state: raise Missing()
+        return state['worker']
+    def create(params,**kw):
+        state['worker']=sandbox(labels=params.labels)
+        raise TimeoutError('do-not-leak')
+    client=SimpleNamespace(get=get,create=create,delete=lambda worker,**kw:deleted.append(worker.id),
+        snapshot=SimpleNamespace(get=lambda x:SimpleNamespace(id='snap-id',image_name='image@sha256:'+'a'*64,organization_id='org')))
+    config={'target':manifest('daytona')['target'],'auto_stop_minutes':15,'timeout':60}
+    with pytest.raises(TimeoutError): daytona_bridge.execute('create',config,{},client,Missing,SimpleNamespace)
+    assert deleted==['sb-id']
+
+
+@pytest.mark.parametrize('expiry',[None,'2000-01-01T00:00:00Z',(__import__('datetime').datetime.now(__import__('datetime').timezone.utc)+__import__('datetime').timedelta(hours=23)).isoformat()])
+def test_sdk_created_sandbox_ignoring_ttl_is_cleaned_up(expiry):
+    state={};deleted=[]
+    def get(name,**kw):
+        if 'worker' not in state: raise Missing()
+        return state['worker']
+    def create(params,**kw):
+        state['worker']=sandbox(labels=params.labels)
+        state['worker'].auto_destroy_at=expiry
+        return state['worker']
+    client=SimpleNamespace(get=get,create=create,delete=lambda worker,**kw:deleted.append(worker.id),
+        snapshot=SimpleNamespace(get=lambda x:SimpleNamespace(id='snap-id',image_name='image@sha256:'+'a'*64,organization_id='org')))
+    config={'target':manifest('daytona')['target'],'auto_stop_minutes':15,'timeout':60}
+    with pytest.raises(ValueError,match='finite lifetime'): daytona_bridge.execute('create',config,{},client,Missing,SimpleNamespace)
+    assert deleted==['sb-id']
