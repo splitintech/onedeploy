@@ -20,7 +20,7 @@ class Ledger:
 
 class Client:
     def __init__(self):
-        self.workers={};self.commands=[];self.files={};self.creates=[];self.deleted=[]
+        self.workers={};self.sessions=[];self.commands=[];self.files={};self.creates=[];self.deleted=[]
         self.volume=Obj(get=lambda *a,**k:Obj(organization_id='account',state='ready'))
         self.snapshot=Obj(get=lambda *a,**k:Obj(organization_id='account',state='ready',image_name=IMAGE,cpu=2,mem=8,disk=20,gpu=1))
         self.evidence=dict(authenticated=True,cuda_available=True,model_on_gpu=True,checksum_verified=True,
@@ -46,7 +46,7 @@ class Client:
         self.creates.append(params)
         worker=Obj(id='worker1',name=params['name'],snapshot=params['snapshot'],organization_id='account',
                    labels=params['labels'],public=False,state='started')
-        worker.process=Obj(exec=self.exec,create_session=lambda *a,**k:None,execute_session_command=lambda *a,**k:None)
+        worker.process=Obj(exec=self.exec,create_session=lambda *a,**k:None,execute_session_command=lambda *a,**k:self.sessions.append(a[1]))
         worker.fs=Obj(upload_file=lambda data,path,**k:self.files.__setitem__(path,data),delete_file=lambda path,**k:self.files.pop(path,None))
         self.workers[worker.id]=self.workers[worker.name]=worker
         return worker
@@ -179,3 +179,22 @@ def test_recovery_rejects_changed_runtime(tmp_path):
     for operation in ('qualify','drain','delete_worker'):
         with pytest.raises(DaytonaContractError):
             transport.release_adapter().inspect_operation(release,operation)
+
+
+def test_bootstrap_executes_cuda_library_launcher(tmp_path):
+    transport,client,release,_=fixture(tmp_path)
+    transport.create(release,'candidate')
+    assert client.sessions == [{'command':'python3 /opt/onedeploy/launch.py','run_async':True}]
+
+
+def test_slow_payload_upload_never_dispatches_after_deadline(tmp_path):
+    transport,client,release,_=fixture(tmp_path)
+    worker=transport.create(release,'candidate')
+    now=[1000.0];transport.clock=lambda:now[0]
+    old=client.workers[worker].fs.upload_file
+    def upload(*args,**kwargs):
+        old(*args,**kwargs);now[0]+=transport.job_timeout+1
+    client.workers[worker].fs.upload_file=upload
+    with pytest.raises(DaytonaContractError):
+        transport.infer(worker,release,{'job_id':'late','audio_base64':'eA=='})
+    assert not any('worker-control infer' in cmd for cmd in client.commands)

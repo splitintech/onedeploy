@@ -6,6 +6,7 @@ in shell arguments or public preview links. No client is created at import time.
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+import math
 from pathlib import PurePosixPath
 import re
 import secrets
@@ -172,7 +173,7 @@ class DaytonaPoolTransport:
             raise DaytonaContractError('Cannot secure worker token')
         worker.process.create_session('onedeploy-worker',request_timeout=self.adapter.timeout)
         worker.process.execute_session_command('onedeploy-worker',
-            self.session_request_type(command='python3 /opt/onedeploy/worker.py',run_async=True),timeout=self.adapter.timeout)
+            self.session_request_type(command='python3 /opt/onedeploy/launch.py',run_async=True),timeout=self.adapter.timeout)
         return worker.id
 
     def inspect_create(self,release,operation_id):
@@ -204,7 +205,15 @@ class DaytonaPoolTransport:
         return all(result.get(k) is True for k in ('ready','gpu','model_verified','inference_passed'))
 
     def infer(self,worker_id,release,payload):
+        deadline=self.clock()+self.job_timeout
+        def remaining():
+            # SDK timeouts use whole seconds; never round above the budget.
+            seconds=math.floor(deadline-self.clock())
+            if seconds<1:
+                raise DaytonaContractError('Inference setup exhausted the request deadline')
+            return min(seconds,self.adapter.timeout)
         worker=self._owned(worker_id,release)
+        remaining()
         if not isinstance(payload,dict) or set(payload)!={'job_id','audio_base64'}:
             raise DaytonaContractError('Invalid inference payload')
         raw=json.dumps(payload,allow_nan=False,separators=(',',':')).encode()
@@ -212,11 +221,11 @@ class DaytonaPoolTransport:
             raise DaytonaContractError('Inference request too large')
         path='/tmp/od-job-'+str(uuid.uuid4())+'.json'
         try:
-            worker.fs.upload_file(raw,path,timeout=self.adapter.timeout)
-            permission=worker.process.exec('chmod 600 '+path,timeout=30)
+            worker.fs.upload_file(raw,path,timeout=remaining())
+            permission=worker.process.exec('chmod 600 '+path,timeout=min(30,remaining()))
             if permission.exit_code!=0:
                 raise DaytonaContractError('Cannot secure inference payload')
-            response=worker.process.exec('/opt/onedeploy/worker-control infer --input '+path+' --json',timeout=self.job_timeout)
+            response=worker.process.exec('/opt/onedeploy/worker-control infer --input '+path+' --json',timeout=remaining())
             if response.exit_code!=0 or not isinstance(response.result,str) or len(response.result)>1024*1024:
                 raise DaytonaContractError('Inference did not return bounded success')
             result=json.loads(response.result)

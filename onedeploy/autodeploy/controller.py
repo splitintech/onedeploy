@@ -284,6 +284,9 @@ class Controller:
                         with self.store.connect() as db:
                             current = db.execute('SELECT * FROM ctl_workers WHERE operation=?', (row['operation'],)).fetchone()
                         self._cleanup(current, old_release)
+            # Provider qualification/cleanup can consume minutes. Never make
+            # admissions from the tick-start timestamp.
+            now = self.clock()
             with self.store.connect() as db:
                 rows = self._workers(db)
                 counts = {r['operation']: db.execute("SELECT COUNT(*) FROM ctl_jobs WHERE operation=? AND state='running'", (r['operation'],)).fetchone()[0] for r in rows}
@@ -295,6 +298,7 @@ class Controller:
                 row = next(r for r in rows if r['operation'] == operation)
                 self._cleanup(row, self.store.get(row['release']))
             for _ in range(decision['create_workers']):
+                now = self.clock()
                 operation = uuid.uuid4().hex
                 cost = self.policy.worker_ttl_seconds * self.policy.total_hourly_rate / 3600
                 with self.store.connect() as db:
@@ -331,6 +335,9 @@ class Controller:
             worker = db.execute('SELECT * FROM ctl_workers WHERE operation=?', (operation,)).fetchone()
             if not current or current[0] != desired_id or not worker or worker['state'] != 'ready' or worker['release'] != desired_id:
                 return
+            if now + self.policy.job_timeout_seconds > worker['created'] + self.policy.worker_ttl_seconds:
+                db.execute("UPDATE ctl_workers SET state='draining' WHERE operation=?", (operation,))
+                return
             inflight = db.execute("SELECT COUNT(*) FROM ctl_jobs WHERE operation=? AND state='running'", (operation,)).fetchone()[0]
             if inflight >= self.policy.concurrency_per_worker:
                 return
@@ -344,6 +351,32 @@ class Controller:
         self._futures.add(future)
 
     def _run_job(self, job_id, payload, worker, lease):
+        # Executor scheduling itself can be delayed. Revalidate immediately before
+        # transmission; a never-sent job can safely return to the queue without
+        # consuming its at-least-once retry allowance.
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            job = db.execute('SELECT state,lease,lease_until FROM ctl_jobs WHERE deployment=? AND id=?',
+                             (self.deployment_id,job_id)).fetchone()
+            if not job or job['state'] != 'running' or job['lease'] != lease:
+                return
+            desired = db.execute('SELECT desired FROM deployments WHERE id=?', (self.deployment_id,)).fetchone()
+            live_worker = db.execute('SELECT * FROM ctl_workers WHERE operation=? AND deployment=?',
+                                     (worker['operation'],self.deployment_id)).fetchone()
+            eligible = (desired is not None and desired['desired'] == worker['release']
+                        and live_worker is not None and live_worker['state'] == 'ready'
+                        and live_worker['release'] == worker['release']
+                        and live_worker['worker'] == worker['worker'])
+            now = self.clock()
+            deadline = (live_worker['created'] if live_worker else worker['created']) + self.policy.worker_ttl_seconds
+            if not eligible or now + self.policy.job_timeout_seconds > deadline or job['lease_until'] <= now:
+                db.execute("UPDATE ctl_jobs SET state='queued',release=NULL,operation=NULL,lease=NULL,lease_until=NULL,attempts=MAX(0,attempts-1),updated=? WHERE deployment=? AND id=? AND lease=?",
+                           (now,self.deployment_id,job_id,lease))
+                if now + self.policy.job_timeout_seconds > deadline:
+                    db.execute("UPDATE ctl_workers SET state='draining' WHERE operation=?", (worker['operation'],))
+                return
+            db.execute('UPDATE ctl_jobs SET lease_until=? WHERE deployment=? AND id=? AND lease=?',
+                       (now+self.policy.job_timeout_seconds,self.deployment_id,job_id,lease))
         try:
             release = self.store.get(worker['release'])
             result = self.transport.infer(worker['worker'], release, payload)

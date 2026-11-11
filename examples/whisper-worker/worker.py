@@ -13,6 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_AUDIO = 10 * 1024 * 1024
 MAX_BODY = 14 * 1024 * 1024
+MAX_AUDIO_SECONDS = 120
+AUDIO_SAMPLE_RATE = 16000
 
 
 def normalized_gpu(value):
@@ -68,6 +70,48 @@ def verify_model(root, manifest_path, digest):
         raise ValueError('Every model file must be in the manifest')
 
 
+def decode_bounded_audio(path):
+    """Stream decode before inference; reject >120 s without allocating it all."""
+    import av
+    import numpy as np
+    chunks = []
+    total_samples = 0
+    decoded_seconds = 0.0
+    with av.open(str(path), mode='r') as container:
+        streams = list(container.streams.audio)
+        if len(streams) != 1:
+            raise ValueError('Exactly one audio stream is required')
+        stream = streams[0]
+        if stream.duration is not None and stream.time_base is not None:
+            if float(stream.duration * stream.time_base) > MAX_AUDIO_SECONDS:
+                raise ValueError('Audio exceeds 120 second limit')
+        resampler = av.AudioResampler(format='fltp', layout='mono', rate=AUDIO_SAMPLE_RATE)
+        def append(frame):
+            nonlocal total_samples
+            if frame.samples < 0 or total_samples + frame.samples > MAX_AUDIO_SECONDS * AUDIO_SAMPLE_RATE:
+                raise ValueError('Audio exceeds decoded sample limit')
+            total_samples += frame.samples
+            chunks.append(frame.to_ndarray().reshape(-1))
+        # Packet iteration bounds malformed containers that yield no useful audio.
+        for count, packet in enumerate(container.demux(stream)):
+            if count >= 100000:
+                raise ValueError('Too many audio packets')
+            for frame in packet.decode():
+                rate = frame.sample_rate
+                if not isinstance(rate, int) or not 8000 <= rate <= 192000 or len(frame.layout.channels) > 8:
+                    raise ValueError('Unsupported audio format')
+                decoded_seconds += frame.samples / rate
+                if decoded_seconds > MAX_AUDIO_SECONDS:
+                    raise ValueError('Audio exceeds 120 second limit')
+                for output in resampler.resample(frame):
+                    append(output)
+        for output in resampler.resample(None):
+            append(output)
+    if total_samples == 0:
+        raise ValueError('No decoded audio samples')
+    return np.concatenate(chunks)
+
+
 class CudaWhisper:
     def __init__(self, model_dir):
         import ctranslate2
@@ -79,7 +123,8 @@ class CudaWhisper:
             raise RuntimeError('Model is not on CUDA')
 
     def transcribe(self, path):
-        segments, _ = self.model.transcribe(str(path), beam_size=5, vad_filter=False)
+        audio = decode_bounded_audio(path)
+        segments, _ = self.model.transcribe(audio, beam_size=5, vad_filter=False)
         return ' '.join(segment.text.strip() for segment in segments).strip()
 
 
@@ -195,7 +240,7 @@ def handler(worker, token):
         def handle_request(self):
             if self.path == '/health' and self.command == 'GET':
                 return self.send_json(200, {'alive': True})
-            if not hmac.compare_digest(self.headers.get('Authorization',''), 'Bearer '+token):
+            if not hmac.compare_digest(self.headers.get('Authorization','').encode('utf-8'), ('Bearer '+token).encode('utf-8')):
                 return self.send_json(401, {'error':'unauthorized'})
             try:
                 if self.path == '/status' and self.command == 'GET': result = worker.status()

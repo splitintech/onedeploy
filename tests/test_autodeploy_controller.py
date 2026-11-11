@@ -212,3 +212,57 @@ def test_health_exposes_budget_blocked_queue_counts(setup):
     health=c.health()
     assert health['status']=='blocked' and health['jobs']['queued']==1
     assert health['budget_remaining_usd']==0 and not health['ready']
+
+
+def test_slow_qualification_cannot_admit_past_worker_deadline(setup):
+    c,t,clock,e=setup
+    rid=c.store.deployment('speech')['desired_release']; r=c.store.get(rid)
+    c.store.save({**r,'worker_deleted':False,'worker_created_at':clock[0]-80})
+    def slow_qualification(*args):
+        clock[0]+=30
+        return True
+    t.qualify=slow_qualification
+    c.submit(payload()); c.tick()
+    assert 'infer' not in t.calls
+    assert c.get_job('job1')['state']=='queued'
+
+
+def test_delayed_executor_rechecks_ttl_before_transmitting(setup,monkeypatch):
+    from concurrent.futures import Future
+    c,t,clock,e=setup
+    rid=c.store.deployment('speech')['desired_release']; r=c.store.get(rid)
+    c.store.save({**r,'worker_deleted':False,'worker_created_at':clock[0]-80})
+    captured=[]
+    def delayed(fn,*args):
+        captured.append((fn,args)); return Future()
+    monkeypatch.setattr(c._pool,'submit',delayed)
+    c.submit(payload()); c.tick()
+    assert c.get_job('job1')['state']=='running'
+    clock[0]+=15
+    fn,args=captured[0];fn(*args)
+    assert 'infer' not in t.calls
+    assert c.get_job('job1')['state']=='queued'
+    assert c.get_job('job1')['attempts']==0
+
+
+@pytest.mark.parametrize('change',['promote','drain','delete'])
+def test_delayed_executor_rechecks_desired_release_and_worker_state(setup,monkeypatch,change):
+    from concurrent.futures import Future
+    c,t,clock,e=setup
+    rid=c.store.deployment('speech')['desired_release']; r=c.store.get(rid)
+    c.store.save({**r,'worker_deleted':False,'worker_created_at':clock[0]})
+    captured=[]
+    def delayed(fn,*args):
+        captured.append((fn,args)); return Future()
+    monkeypatch.setattr(c._pool,'submit',delayed)
+    c.submit(payload()); c.tick()
+    assert c.get_job('job1')['state']=='running'
+    if change=='promote':
+        next_release=e.plan(config(),spec('d')); e.apply(next_release['release_id'],approved=True)
+    else:
+        with c.store.connect() as db:
+            db.execute('UPDATE ctl_workers SET state=?', ('draining' if change=='drain' else 'deleted',))
+    fn,args=captured[0];fn(*args)
+    assert 'infer' not in t.calls
+    job=c.get_job('job1')
+    assert job['state']=='queued' and job['attempts']==0 and job['release_id'] is None

@@ -11,7 +11,7 @@ docker build --build-arg CUDA_BASE='<approved-image>@sha256:<verified-digest>' \
   -f examples/whisper-worker/Dockerfile -t whisper-worker:reviewed .
 ```
 
-`requirements.lock` pins all 24 resolved dependencies with artifact SHA-256 hashes for Linux x86_64 CPython 3.12. Re-resolve for other architectures/Python versions rather than weakening hashes. The image preserves its base entrypoint for Daytona toolbox compatibility. Controller bootstrap starts `python3 /opt/onedeploy/worker.py` in an authenticated SDK process session after mounting files.
+`requirements.lock` pins all 24 resolved dependencies with artifact SHA-256 hashes for Linux x86_64 CPython 3.12. Re-resolve for other architectures/Python versions rather than weakening hashes. The image preserves its base entrypoint for Daytona toolbox compatibility. Controller bootstrap starts `python3 /opt/onedeploy/launch.py` in an authenticated SDK process session after mounting files.
 
 ## Required runtime files and settings
 
@@ -35,3 +35,14 @@ POST `/qualify` performs real synthetic inference and persists evidence. GET `/q
 SQLite records job state, input hashes and completed transcript results for idempotency. This is sensitive runtime data: keep the state directory private; worker deletion removes local state. If mounting durable state, configure external retention/deletion and encryption policies before use. Single-process flock protects restart recovery; prior active jobs become interrupted, not automatically repeated. The external controller remains authoritative across worker deletion. A killed GPU job must be reconciled, not presumed completed.
 
 Provider hard TTL protects bounded lifetime but can interrupt a long request. Admission needs enough remaining TTL for the configured job deadline. Live GPU memory, cold-start, latency, output quality, model volume throughput and end-to-end routing require paid qualification before production.
+
+
+## CUDA library-loader gate
+
+`launch.py` discovers existing `nvidia/cublas/lib` and `nvidia/cudnn/lib` directories using the running interpreter's site/sysconfig locations plus the packaged dependency directory. It prepends these to the inherited system CUDA search paths and **execs a fresh interpreter** before importing CTranslate2. This supports pip-provided NVIDIA libraries without assuming a Conda prefix or fixed Python installation path; it never downloads libraries. System-wide libraries remain supported.
+
+The Docker build runs `python3 /opt/onedeploy/launch.py --smoke` as the runtime user. It must load the CUDA12 cuBLAS/cuBLASLt and cuDNN9 shared-library SONAMEs and import the real CTranslate2/faster-whisper runtime. A missing/incompatible library fails the build. This CPU-only loader gate does not test a GPU, model loading, correctness, latency or Daytona bootstrap. For an already built image, run the same command without GPU flags to verify the loader gate, then perform separately authorized GPU qualification.
+
+Decoded audio is capped at **120 seconds** (mono 16 kHz, at most 1,920,000 output samples). PyAV iterates packets/frames, checks cumulative decoded duration before resampling/array accumulation, and rejects overlong or unsupported input before GPU inference. A small compressed file cannot bypass the duration limit. Input must contain exactly one audio stream; 8–192 kHz input and up to eight channels are accepted and resampled to mono. Empty audio is rejected.
+
+HTTP/SDK request timeouts are **observation limits, not GPU cancellation**. If a client times out, the worker may still finish inference; its job remains active until actual completion/failure. Do not retry as a new job or delete an active worker to infer success. Reconcile the original job and drain, or wait for the approved hard provider TTL; a TTL may interrupt work and must never be reported as successful completion.

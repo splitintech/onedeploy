@@ -33,3 +33,15 @@ Every live qualification gate remains explicit: image build, actual GPU/model ou
 - Model paths and runtime inputs are bound to reviewed policy; token/audio never enter command arguments.
 - Controller dispatch uses desired-release and lease fencing; old-worker drain protects active work.
 - Application tests run in an isolated checkout before source-bound plan creation.
+
+## Follow-on qualification (2026-11-11)
+
+Recreated the locked Python 3.12 environment successfully; `pip check` reports no broken dependencies. Independently installed the exact hash-locked worker runtime and imported actual faster-whisper/CTranslate2; this CPU host reports zero CUDA devices. Inspected the official Daytona 0.231.0 wheel's filesystem, process-session, snapshot-resource and hard-TTL signatures against the adapter. This is compatibility evidence, not a provider deployment.
+
+Follow-on regressions cover time elapsed during qualification, executor delays, end-to-end inference setup deadlines and CUDA library discovery before process startup. The image now includes a CPU-only shared-library/import smoke gate. A passing source test does not imply that this image gate has actually run.
+
+**Current external gates:** this connected environment has no Docker/Podman/BuildKit executable or Docker daemon and no GPU. No other connected computer is available. The formal Codex security-scan workflow/preflight is unavailable here; focused code review and regression tests are not a formal scan or certification.
+
+Before a paid live qualification, an operator must provide an approved Daytona target/region/GPU type and a total spending limit (including snapshot/storage/network charges), an existing authorized immutable model volume and checksum manifest, and an authenticated private execution environment. Enter credentials through the provider's secure login or secret store, never a chat or commit. Separately qualify an image build on Docker and real synthetic inference, restart/recovery, drain, rollback, TTL and measured cost/latency. Only after those pass configure the Railway voice-prompt service to forward **Whisper inference only**, retaining its other responsibilities and rollback route.
+
+Follow-on verification: **716 tests passed** on Python 3.12. Actual PyAV decoding accepted a 0.1-second WAV and rejected a 120.1-second WAV before inference. The worker now bounds streamed decoded audio to 120 seconds / 1,920,000 samples and cleanly rejects non-ASCII invalid authorization. Client request deadlines remain observation bounds, not claims of GPU cancellation. Delayed executor tests also cover promotion, draining and deletion before transmission.
