@@ -125,6 +125,34 @@ class Controller:
             out['result'] = json.loads(row['result'])
         return out
 
+    def cancel(self, job_id):
+        """Fence one job; delete only its dedicated worker, never replay it.
+
+        Transport failures leave cancellation pending until tick verifies deletion.
+        A queued request has not claimed a worker and is cancelled without touching
+        unrelated provisioning or shared model storage.
+        """
+        row = None
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            job = db.execute('SELECT state,operation FROM ctl_jobs WHERE deployment=? AND id=?',
+                             (self.deployment_id, job_id)).fetchone()
+            if not job:
+                _error('invalid_config', 'Unknown job.')
+            if job['state'] == 'queued':
+                db.execute("UPDATE ctl_jobs SET state='cancelled',payload=NULL,result=NULL,updated=? WHERE deployment=? AND id=?",
+                           (self.clock(), self.deployment_id, job_id))
+            elif job['state'] in ('running', 'cancelling'):
+                db.execute("UPDATE ctl_jobs SET state='cancelling',payload=NULL,result=NULL,lease=NULL,lease_until=NULL,updated=? WHERE deployment=? AND id=?",
+                           (self.clock(), self.deployment_id, job_id))
+                db.execute("UPDATE ctl_workers SET state='draining',pending='terminate' WHERE deployment=? AND operation=?",
+                           (self.deployment_id, job['operation']))
+                row = db.execute('SELECT * FROM ctl_workers WHERE deployment=? AND operation=?',
+                                 (self.deployment_id, job['operation'])).fetchone()
+        if row is not None:
+            self._terminate(row, self.store.get(row['release']))
+        return self.get_job(job_id)
+
     def _workers(self, db):
         return db.execute("SELECT * FROM ctl_workers WHERE deployment=? AND state!='deleted' ORDER BY created", (self.deployment_id,)).fetchall()
 
@@ -143,7 +171,7 @@ class Controller:
             db.execute("UPDATE ctl_jobs SET state='uncertain',payload=NULL,lease=NULL,lease_until=NULL,updated=? WHERE deployment=? AND id=?", (now,self.deployment_id,row['id']))
             db.execute("UPDATE ctl_workers SET state='draining',pending='terminate' WHERE operation=?", (row['operation'],))
         # Tombstones retain IDs/hashes so expired jobs cannot silently execute again.
-        db.execute("UPDATE ctl_jobs SET state='expired',payload=NULL,result=NULL WHERE deployment=? AND state IN ('done','failed','uncertain','timed_out') AND updated<?", (self.deployment_id, now-self.retention_seconds))
+        db.execute("UPDATE ctl_jobs SET state='expired',payload=NULL,result=NULL WHERE deployment=? AND state IN ('done','failed','uncertain','timed_out','cancelled') AND updated<?", (self.deployment_id, now-self.retention_seconds))
         db.execute("UPDATE ctl_jobs SET state='expired',payload=NULL,result=NULL,updated=? WHERE deployment=? AND state='queued' AND created<?", (now, self.deployment_id, now-self.retention_seconds))
 
     def _hold_provisioning(self, release_id, reason="creation_timeout"):
@@ -189,6 +217,8 @@ class Controller:
             db.execute("UPDATE ctl_workers SET state='deleted',pending=NULL WHERE operation=? AND deployment=?",
                        (row['operation'],self.deployment_id))
             db.execute("UPDATE ctl_jobs SET state='timed_out',payload=NULL,result=NULL,updated=? WHERE operation=? AND deployment=? AND state='uncertain'",
+                       (self.clock(),row['operation'],self.deployment_id))
+            db.execute("UPDATE ctl_jobs SET state='cancelled',payload=NULL,result=NULL,updated=? WHERE operation=? AND deployment=? AND state='cancelling'",
                        (self.clock(),row['operation'],self.deployment_id))
         if release.get('worker_id') == row['worker']:
             self.store.save({**release,'worker_deleted':True})
@@ -502,6 +532,7 @@ def make_server(controller, *, host='127.0.0.1', port=8766, token=None):
     """Run authenticated HTTP API plus reconciliation loop until interrupted.
 
     POST /infer returns durable 202 job status; poll GET /jobs/<job_id>.
+    DELETE /jobs/<job_id> fences work and requests dedicated-worker deletion.
     Token defaults to ONEDEPLOY_CONTROLLER_TOKEN. No token is printed or saved.
     """
     token = token or os.environ.get('ONEDEPLOY_CONTROLLER_TOKEN')
@@ -536,6 +567,17 @@ def make_server(controller, *, host='127.0.0.1', port=8766, token=None):
                 self._respond(200,controller.get_job(self.path.rsplit('/',1)[1]))
             except OnedeployError:
                 self._respond(404,{'error':'not_found'})
+        def do_DELETE(self):
+            if not self._authorized():
+                return self._respond(401, {'error': 'unauthorized'})
+            if not re.fullmatch(r'/jobs/[A-Za-z0-9_-]{1,100}', self.path):
+                return self._respond(404, {'error': 'not_found'})
+            try:
+                result = controller.cancel(self.path.rsplit('/', 1)[1])
+            except OnedeployError:
+                return self._respond(404, {'error': 'not_found'})
+            return self._respond(202 if result['state'] == 'cancelling' else 200, result)
+
         def do_POST(self):
             if not self._authorized():
                 return self._respond(401,{'error':'unauthorized'})

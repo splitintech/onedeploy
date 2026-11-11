@@ -168,6 +168,13 @@ def test_http_auth_bounded_input_and_async_job_contract(setup):
         assert '202' in response.splitlines()[0] and 'queued' in response
         response=request('GET','/jobs/job1')
         assert '200' in response.splitlines()[0] and 'audio_base64' not in response
+        assert '401' in request('DELETE','/jobs/job1',auth=False).splitlines()[0]
+        assert c.get_job('job1')['state']=='queued'
+        assert '404' in request('DELETE','/jobs/missing').splitlines()[0]
+        assert '404' in request('DELETE','/jobs/../job1').splitlines()[0]
+        response=request('DELETE','/jobs/job1')
+        assert '200' in response.splitlines()[0] and 'cancelled' in response
+        assert 'audio_base64' not in response
         response=request('POST','/infer','{"job_id":"a","job_id":"b","audio_base64":"YQ=="}')
         assert '400' in response.splitlines()[0]
     finally:
@@ -371,3 +378,63 @@ def test_provisioning_hold_does_not_cancel_existing_healthy_worker_jobs(setup):
         db.execute('INSERT INTO ctl_provisioning_holds VALUES (?,?,?,?)',('speech',rid,'creation_timeout',clock[0]))
     c.submit(payload('job2'));c.tick();wait(c,'job2')
     assert c.get_job('job2')['state']=='done' and t.calls.count('create')==1
+
+
+def test_cancel_queued_is_tombstone_without_provisioning(setup):
+    c,t,clock,e=setup
+    c.submit(payload())
+    assert c.cancel('job1')['state']=='cancelled'
+    assert c.cancel('job1')['state']=='cancelled'
+    assert c.submit(payload())['state']=='cancelled'
+    c.tick()
+    assert t.calls==[]
+    with c.store.connect() as db:
+        assert db.execute("SELECT payload FROM ctl_jobs WHERE id='job1'").fetchone()[0] is None
+
+
+def test_cancel_running_fences_late_result_and_terminates(setup):
+    c,t,clock,e=setup
+    started=threading.Event(); release=threading.Event()
+    def infer(w,r,p):
+        started.set(); release.wait(3)
+        return dict(job_id=p['job_id'],text='late',release_id=r['release_id'])
+    t.infer=infer
+    c.submit(payload()); c.tick(); c.tick()
+    assert started.wait(1)
+    try:
+        assert c.cancel('job1')['state']=='cancelled'
+        assert t.calls.count('terminate')==1
+    finally:
+        release.set()
+    for f in list(c._futures): f.result(timeout=2)
+    assert c.get_job('job1')['state']=='cancelled'
+    assert 'result' not in c.get_job('job1')
+    assert c.submit(payload())['state']=='cancelled'
+
+
+def test_cancel_unconfirmed_deletion_stays_pending(setup):
+    c,t,clock,e=setup
+    started=threading.Event(); release=threading.Event()
+    def infer(w,r,p):
+        started.set(); release.wait(3)
+        return dict(job_id=p['job_id'],text='late',release_id=r['release_id'])
+    def fail(*args): raise TimeoutError('private provider message')
+    t.infer=infer; t.cancel_timed_out=fail
+    c.submit(payload()); c.tick(); c.tick()
+    assert started.wait(1)
+    try:
+        assert c.cancel('job1')['state']=='cancelling'
+        assert c.submit(payload())['state']=='cancelling'
+        with c.store.connect() as db:
+            assert db.execute("SELECT payload,lease FROM ctl_jobs WHERE id='job1'").fetchone()[:] == (None,None)
+        t.cancel_timed_out=lambda w,r,op:t.deleted.append(w)
+        assert c.cancel('job1')['state']=='cancelled'
+    finally: release.set()
+
+
+def test_cancel_unknown_and_done_do_not_delete_worker(setup):
+    c,t,clock,e=setup
+    with pytest.raises(OnedeployError): c.cancel('unknown')
+    c.submit(payload()); c.tick(); c.tick(); wait(c)
+    assert c.cancel('job1')['state']=='done'
+    assert not t.deleted
