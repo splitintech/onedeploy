@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace as Obj
 import pytest
 
@@ -45,12 +46,13 @@ class Client:
     def create(self,params,timeout):
         self.creates.append(params)
         worker=Obj(id='worker1',name=params['name'],snapshot=params['snapshot'],organization_id='account',
-                   labels=params['labels'],public=False,state='started')
+                   labels=params['labels'],public=False,state='started',
+                   auto_destroy_at=datetime.now(timezone.utc)+timedelta(minutes=params['ttl_minutes']))
         worker.process=Obj(exec=self.exec,create_session=lambda *a,**k:None,execute_session_command=lambda *a,**k:self.sessions.append(a[1]))
         worker.fs=Obj(upload_file=lambda data,path,**k:self.files.__setitem__(path,data),delete_file=lambda path,**k:self.files.pop(path,None))
         self.workers[worker.id]=self.workers[worker.name]=worker
         return worker
-    def delete(self,worker,timeout):
+    def delete(self,worker,timeout,wait=False):
         self.deleted.append(worker.id);self.workers.pop(worker.id);self.workers.pop(worker.name)
 
 
@@ -195,6 +197,142 @@ def test_slow_payload_upload_never_dispatches_after_deadline(tmp_path):
     def upload(*args,**kwargs):
         old(*args,**kwargs);now[0]+=transport.job_timeout+1
     client.workers[worker].fs.upload_file=upload
-    with pytest.raises(DaytonaContractError):
+    with pytest.raises(TimeoutError):
         transport.infer(worker,release,{'job_id':'late','audio_base64':'eA=='})
     assert not any('worker-control infer' in cmd for cmd in client.commands)
+
+
+def test_timeout_termination_stops_active_job_and_confirms_absence(tmp_path):
+    transport,client,release,ledger=fixture(tmp_path);worker=transport.create(release,'slot1')
+    client.active=1
+    assert transport.terminate(worker,release) is True
+    assert client.deleted==[worker] and len(ledger.retired)==1
+    assert not any('worker-control drain' in command for command in client.commands)
+    assert transport.terminate(worker,release) is True
+    assert client.deleted==[worker]
+
+
+def test_uncertain_termination_is_held_and_not_replayed(tmp_path):
+    transport,client,release,ledger=fixture(tmp_path);worker=transport.create(release,'slot1')
+    calls=[]
+    def timeout(*args,**kwargs):calls.append(1);raise TimeoutError('unknown delete')
+    client.delete=timeout
+    assert transport.terminate(worker,release) is False
+    assert transport.terminate(worker,release) is False
+    assert calls==[1] and not ledger.retired
+    actual=client.workers[worker];client.workers.pop(actual.name);client.workers.pop(worker)
+    assert transport.terminate(worker,release) is True
+    assert len(ledger.retired)==1
+
+
+def test_termination_checks_allocation_and_dedicated_worker(tmp_path):
+    transport,client,release,ledger=fixture(tmp_path);worker=transport.create(release,'slot1')
+    transport.concurrency_per_worker=2
+    with pytest.raises(DaytonaContractError):transport.terminate(worker,release)
+    transport.concurrency_per_worker=1
+    client.workers[worker].labels['onedeploy-allocation']='d'*64
+    with pytest.raises(DaytonaContractError):transport.terminate(worker,release)
+    assert not client.deleted and not ledger.retired
+
+
+def test_termination_never_retires_unknown_worker(tmp_path):
+    transport,client,release,ledger=fixture(tmp_path)
+    with pytest.raises(DaytonaContractError):transport.terminate('unknown',release)
+    assert not ledger.retired
+
+
+def test_timeout_skips_payload_cleanup_so_cancellation_is_immediate(tmp_path):
+    transport,client,release,_=fixture(tmp_path);worker=transport.create(release,'slot1')
+    original=client.exec
+    def execute(command,timeout):
+        if 'worker-control infer' in command:raise TimeoutError('execution')
+        return original(command,timeout)
+    client.workers[worker].process.exec=execute
+    def no_cleanup(*a,**k):raise AssertionError('cleanup must not delay cancellation')
+    client.workers[worker].fs.delete_file=no_cleanup
+    with pytest.raises(TimeoutError):transport.infer(worker,release,{'job_id':'j','audio_base64':'eA=='})
+    assert transport.terminate(worker,release) is True
+
+
+def test_cancel_operation_mismatch_cannot_stop_worker(tmp_path):
+    transport,client,release,_=fixture(tmp_path);worker=transport.create(release,'slot1')
+    with pytest.raises(DaytonaContractError):transport.cancel_timed_out(worker,release,'slot2')
+    assert not client.deleted
+    transport.cancel_timed_out(worker,release,'slot1')
+    assert client.deleted==[worker]
+
+
+def test_only_typed_sdk_timeouts_trigger_timeout_classification(monkeypatch):
+    import sys
+    from onedeploy.autodeploy.transport import _is_timeout
+    class SDKTimeout(Exception):pass
+    monkeypatch.setitem(sys.modules,'daytona',Obj(DaytonaTimeoutError=SDKTimeout))
+    assert _is_timeout(SDKTimeout('deadline')) is True
+    assert _is_timeout(RuntimeError('timeout text without timeout type')) is False
+
+
+def test_create_sdk_timeout_inspects_and_identifies_without_replay(tmp_path,monkeypatch):
+    import sys
+    class SDKTimeout(Exception):pass
+    monkeypatch.setitem(sys.modules,'daytona',Obj(DaytonaTimeoutError=SDKTimeout))
+    transport,client,release,ledger=fixture(tmp_path)
+    original=client.create
+    def accepted_then_timeout(params,timeout):
+        original(params,timeout)
+        raise SDKTimeout('accepted response lost')
+    client.create=accepted_then_timeout
+    with pytest.raises(TimeoutError) as caught:transport.create(release,'slot1')
+    assert caught.value.worker_id=='worker1'
+    assert len(client.creates)==1 and client.sessions==[]
+    transport.cancel_timed_out(caught.value.worker_id,release,'slot1')
+    assert client.deleted==['worker1']
+
+
+def test_unknown_create_timeout_never_invents_worker_identity(tmp_path):
+    transport,client,release,ledger=fixture(tmp_path)
+    def timeout(*a,**k):raise TimeoutError('no known outcome')
+    client.create=timeout
+    with pytest.raises(TimeoutError) as caught:transport.create(release,'slot1')
+    assert caught.value.worker_id is None
+    assert client.deleted==[] and ledger.retired==[]
+
+
+def test_bootstrap_timeout_recovers_existing_exact_worker(tmp_path):
+    transport,client,release,ledger=fixture(tmp_path)
+    original=client.create
+    def create(*args,**kwargs):
+        worker=original(*args,**kwargs)
+        def timeout(*a,**k):raise TimeoutError('bootstrap response lost')
+        worker.process.execute_session_command=timeout
+        return worker
+    client.create=create
+    with pytest.raises(TimeoutError) as caught:transport.create(release,'slot1')
+    assert caught.value.worker_id=='worker1'
+    assert len(client.creates)==1
+
+
+@pytest.mark.parametrize('expiry',[None,'not-a-date','2099-01-01T00:00:00Z','2000-01-01T00:00:00Z',datetime(2030,1,1)])
+def test_unconfirmed_or_unbounded_expiry_identified_for_cancellation(tmp_path,expiry):
+    transport,client,release,ledger=fixture(tmp_path)
+    original=client.create
+    def ignored_ttl(*args,**kwargs):
+        worker=original(*args,**kwargs);worker.auto_destroy_at=expiry;return worker
+    client.create=ignored_ttl
+    with pytest.raises(TimeoutError) as error:transport.create(release,'slot1')
+    assert error.value.worker_id=='worker1'
+    assert client.sessions==[] and TOKEN not in client.files
+    transport.cancel_timed_out(error.value.worker_id,release,'slot1')
+    assert client.deleted==['worker1'] and ledger.retired
+
+
+def test_iso_expiry_accepted_and_reuse_rechecks_deadline(tmp_path):
+    transport,client,release,ledger=fixture(tmp_path)
+    original=client.create
+    def iso(*args,**kwargs):
+        worker=original(*args,**kwargs);worker.auto_destroy_at=worker.auto_destroy_at.isoformat();return worker
+    client.create=iso
+    assert transport.create(release,'slot1')=='worker1'
+    client.workers['worker1'].auto_destroy_at=None
+    with pytest.raises(TimeoutError) as error:transport.create(release,'slot1')
+    assert error.value.worker_id=='worker1'
+    assert len(client.creates)==1

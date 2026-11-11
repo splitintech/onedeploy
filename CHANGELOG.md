@@ -45,3 +45,10 @@ This is a source-development version, not a registry publication or a live-provi
 - Add local-model CUDA Whisper worker, checksummed model-volume contract, candidate adoption, bounded lifetime and conservative allocation reservations.
 - Add capability-aware provider expansion plan; Daytona is the first implemented AutoDeploy profile, not a claim that all vendors support it.
 - Docker image build, paid GPU/provider qualification, production networking and cutover remain unverified; no production cutover is implied.
+
+### Timeout and finite-lifetime safety
+
+- Cancel timed-out dedicated AutoDeploy workers at the sandbox boundary, fence late results and verify destruction before capacity release. Uncertain deletion stays pending; finite provider TTL remains the fallback.
+- Quarantine timed-out startup/creation releases to prevent automatic replacement spending loops; keep healthy workers serving without replaying timed-out jobs.
+- Require confirmed finite expiration and exact ownership before operation; shared volumes and preexisting/shared sandbox workloads are not destroyed by guessed cleanup.
+- Generic Daytona contracts are now `3-cli-ttl` / `3-sdk-ttl`, with finite 15-minute default TTL and 1–1440-minute reviewed override. Recreate older plans. Human and Codex/agent OneDeploy callers use the same policy.

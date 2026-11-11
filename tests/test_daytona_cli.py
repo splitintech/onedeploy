@@ -1,6 +1,8 @@
 """Offline contracts for the official Daytona CLI v0.226.0 transport."""
 import json
 from copy import deepcopy
+from datetime import datetime, timezone, timedelta
+EXPIRY=(datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat()
 import pytest
 from onedeploy.providers import get_adapter
 from onedeploy.providers import daytona_cli_bridge as bridge
@@ -19,7 +21,7 @@ def config():
 
 def sandbox():
     return {'id':'sb-id','name':'sandbox','organizationId':'org','state':'started','snapshot':'snap-id',
-            'public':False,'autoStopInterval':15,'env':{'SECRET':'do-not-leak'},'signedUrl':'do-not-leak'}
+            'public':False,'autoStopInterval':15,'autoDestroyAt':EXPIRY,'env':{'SECRET':'do-not-leak'},'signedUrl':'do-not-leak'}
 
 
 def snapshot():
@@ -48,13 +50,13 @@ class CLI:
 
 def test_cli_is_default_and_sdk_is_explicit():
     a=get_adapter('daytona')
-    assert a.version=='2-cli'
+    assert a.version=='3-cli-ttl'
     assert a.version_command()['argv']==['daytona','--version']
     op=a.plan(manifest())[0]
     assert op['argv'][2].endswith('/daytona_cli_bridge.py')
     assert not op['env_keys'] and op['stdin_env_keys']==[]
     assert a.capabilities['logs'] is False
-    assert get_adapter('daytona',{'target':{'transport':'sdk'}}).version=='2-sdk'
+    assert get_adapter('daytona',{'target':{'transport':'sdk'}}).version=='3-sdk-ttl'
 
 
 @pytest.mark.parametrize('operation',['identity','inspect','reconcile'])
@@ -70,7 +72,9 @@ def test_identity_projection_and_absence(operation):
 def test_create_uses_verified_snapshot_and_private_no_secret_argv():
     cli=CLI();out=bridge.execute('create',config(),cli)
     write=[args for args,mutation in cli.calls if mutation]
-    assert write==[['create','--name','sandbox','--snapshot','snap-id','--auto-stop','15','--auto-delete','-1','--target','us','--label','onedeploy-managed=true']]
+    assert len(write)==1
+    assert write[0][:-2]==['create','--name','sandbox','--snapshot','snap-id','--auto-stop','15','--auto-delete','0','--ttl','15','--target','us','--label','onedeploy-managed=true']
+    assert write[0][-2]=='--label' and write[0][-1].startswith('onedeploy-lease=')
     assert out['id']=='sb-id' and out['public'] is False
     assert 'SECRET' not in json.dumps(out)
     assert cli.calls[-2][0][:2]==['organization','members']
@@ -250,3 +254,83 @@ def test_provider_projection_rejects_nested_or_credential_bearing_fields():
     with pytest.raises(bridge.Failure):bridge.summary(row,'org')
     snap=snapshot();snap['imageName']='user:password@registry/image@sha256:'+'a'*64
     with pytest.raises(bridge.Failure):bridge.snapshot_receipt(snap,'org')
+
+
+@pytest.mark.parametrize('ttl',[0,-1,True,1441])
+def test_create_never_accepts_unbounded_or_invalid_ttl(ttl):
+    transport=CLI(); c=config();c['ttl_minutes']=ttl
+    with pytest.raises(bridge.Failure): bridge.execute('create',c,transport)
+    assert not any(args[0]=='create' for args,_ in transport.calls)
+
+
+def test_start_rejects_unbounded_existing_sandbox():
+    transport=CLI(); row=sandbox();row.pop('autoDestroyAt');transport.rows=[row]
+    c=config();c['approved_inspection']=bridge.summary(row,'org')
+    with pytest.raises(bridge.Failure): bridge.execute('start',c,transport)
+    assert not any(args[0]=='start' for args,_ in transport.calls)
+
+
+def test_timed_out_create_deletes_only_exact_new_lease():
+    class TimeoutCLI(CLI):
+        def call(self,args,**kwargs):
+            if args[0]=='create':
+                self.calls.append((args,True))
+                row=sandbox();row['labels']={'onedeploy-lease':args[-1].split('=',1)[1]};self.rows=[row]
+                raise bridge.Failure()
+            if args[0]=='delete': self.calls.append((args,True));return ''
+            return super().call(args,**kwargs)
+    transport=TimeoutCLI()
+    with pytest.raises(bridge.Failure): bridge.execute('create',config(),transport)
+    assert ['delete','sb-id'] in [args for args,_ in transport.calls]
+
+
+def test_timeout_does_not_delete_other_lease():
+    class TimeoutCLI(CLI):
+        def call(self,args,**kwargs):
+            if args[0]=='create':
+                self.calls.append((args,True));row=sandbox();row['labels']={'onedeploy-lease':'someone-else'};self.rows=[row]
+                raise bridge.Failure()
+            return super().call(args,**kwargs)
+    transport=TimeoutCLI()
+    with pytest.raises(bridge.Failure): bridge.execute('create',config(),transport)
+    assert not any(args[0]=='delete' for args,_ in transport.calls)
+
+
+@pytest.mark.parametrize('operation',['verify','verify-checks'])
+def test_unbounded_reuse_never_executes_job(operation):
+    transport=CLI();row=sandbox();row['autoDestroyAt']=None;transport.rows=[row]
+    with pytest.raises(bridge.Failure): bridge.execute(operation,config(),transport)
+    assert not any(args[0]=='exec' for args,_ in transport.calls)
+
+
+def test_postcreate_verification_failure_cleans_owned_lease():
+    class BadInfo(CLI):
+        def call(self,args,**kw):
+            if args[0]=='create':
+                self.calls.append((args,True));row=sandbox();row['public']=True;row['labels']={'onedeploy-lease':args[-1].split('=',1)[1]};self.rows=[row];return ''
+            if args[0]=='delete':self.calls.append((args,True));return ''
+            return super().call(args,**kw)
+    transport=BadInfo()
+    with pytest.raises(bridge.Failure):bridge.execute('create',config(),transport)
+    assert [args for args,_ in transport.calls if args[0]=='delete']==[['delete','sb-id']]
+
+
+def test_finite_lifetime_accepts_sdk_datetime_and_rejects_disabled():
+    assert bridge.finite_lifetime(datetime.now(timezone.utc)+timedelta(minutes=5))
+    assert bridge.finite_lifetime(EXPIRY)
+    assert not bridge.finite_lifetime(None)
+    assert not bridge.finite_lifetime(datetime.now(timezone.utc)-timedelta(seconds=1))
+
+
+@pytest.mark.parametrize('expiry',[None,'2000-01-01T00:00:00Z',(datetime.now(timezone.utc)+timedelta(hours=23)).isoformat()])
+def test_created_sandbox_ignoring_ttl_is_cleaned_up(expiry):
+    class IgnoredTTL(CLI):
+        def call(self,args,**kw):
+            if args[0]=='create':
+                self.calls.append((args,True));row=sandbox();row['autoDestroyAt']=expiry
+                row['labels']={'onedeploy-lease':args[-1].split('=',1)[1]};self.rows=[row];return ''
+            if args[0]=='delete':self.calls.append((args,True));return ''
+            return super().call(args,**kw)
+    transport=IgnoredTTL()
+    with pytest.raises(bridge.Failure):bridge.execute('create',config(),transport)
+    assert [args for args,_ in transport.calls if args[0]=='delete']==[['delete','sb-id']]

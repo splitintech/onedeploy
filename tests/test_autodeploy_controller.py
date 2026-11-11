@@ -25,6 +25,7 @@ class Transport:
         return dict(job_id=p['job_id'],text='hello',release_id=r['release_id'])
     def drain(self,w,r): self.calls.append('drain'); return True
     def delete(self,w,r): self.deleted.append(w)
+    def cancel_timed_out(self,w,r,op): self.calls.append('terminate'); self.deleted.append(w)
 
 
 @pytest.fixture
@@ -69,8 +70,11 @@ def test_job_id_conflict(setup):
 
 def test_create_timeout_inspects_no_duplicate(setup):
     c,t,*_=setup; t.fail_create=True
-    c.submit(payload()); c.tick(); c.tick(); wait(c)
+    c.submit(payload()); c.tick()
+    with c.store.connect() as db: db.execute('UPDATE ctl_budget SET reserved=cap')
+    c.tick()
     assert t.calls.count('create')==1 and 'inspect' in t.calls
+    assert t.calls.count('terminate')==1 and 'infer' not in t.calls
 
 
 def test_promotion_sends_new_jobs_only_new_release(setup):
@@ -82,20 +86,21 @@ def test_promotion_sends_new_jobs_only_new_release(setup):
     assert len(t.deleted)==1
 
 
-def test_expired_lease_is_uncertain_by_default(setup):
+def test_timeout_immediately_terminates_without_replay(setup):
     c,t,clock,e=setup; t.fail_infer=True
     c.submit(payload()); c.tick(); c.tick()
     time.sleep(.03); clock[0]+=11; c.tick()
-    assert c.get_job('job1')['state']=='uncertain'
+    assert c.get_job('job1')['state']=='timed_out'
     assert t.calls.count('infer')==1
 
 
-def test_opt_in_retry_uses_lease_fencing(setup):
+def test_timeout_never_replays_even_legacy_retry_flag(setup):
     c,t,clock,e=setup; c.allow_retries=True; t.fail_infer=True
     c.submit(payload()); c.tick(); c.tick()
-    time.sleep(.03); clock[0]+=11; t.fail_infer=False
-    c.tick(); c.tick(); wait(c)
-    assert c.get_job('job1')['attempts']==2
+    wait(c,state='timed_out'); clock[0]+=11; t.fail_infer=False
+    c.tick(); c.tick()
+    assert c.get_job('job1')['attempts']==1
+    assert t.calls.count('infer')==1 and t.calls.count('terminate')==1
 
 
 def test_budget_is_durable_and_blocks_new_workers(setup):
@@ -266,3 +271,103 @@ def test_delayed_executor_rechecks_desired_release_and_worker_state(setup,monkey
     assert 'infer' not in t.calls
     job=c.get_job('job1')
     assert job['state']=='queued' and job['attempts']==0 and job['release_id'] is None
+
+
+def test_timeout_keeps_job_uncertain_until_owned_deletion_confirmed(setup):
+    c,t,clock,e=setup; t.fail_infer=True
+    cancellation=[]
+    def unconfirmed(*args):
+        cancellation.append(args)
+        raise RuntimeError('provider timeout secret')
+    t.cancel_timed_out=unconfirmed
+    c.submit(payload()); c.tick(); c.tick(); wait(c,state='uncertain')
+    assert c.get_job('job1')['attempts']==1
+    with c.store.connect() as db:
+        row=db.execute('SELECT state,pending FROM ctl_workers').fetchone()
+    assert tuple(row)==('draining','terminate')
+    assert not t.deleted
+    def confirmed(w,r,op): t.deleted.append(w)
+    t.cancel_timed_out=confirmed
+    c.tick(); assert c.get_job('job1')['state']=='timed_out'
+    assert len(t.deleted)==1 and t.calls.count('infer')==1
+
+
+def test_lease_expiry_cancels_unknown_completion_without_replay(setup):
+    c,t,clock,e=setup; c.allow_retries=True
+    def unknown(*args):
+        t.calls.append('infer'); raise RuntimeError('network result unknown')
+    t.infer=unknown
+    c.submit(payload()); c.tick(); c.tick(); time.sleep(.03)
+    clock[0]+=11; c.tick()
+    assert c.get_job('job1')['state']=='timed_out'
+    assert t.calls.count('terminate')==1 and t.calls.count('infer')==1
+
+
+def test_dedicated_timeout_policy_rejects_shared_worker(setup):
+    from dataclasses import replace
+    c,t,clock,e=setup
+    with pytest.raises(OnedeployError,match='one job per dedicated worker'):
+        Controller(c.store,'speech',t,replace(c.policy,concurrency_per_worker=2),1)
+
+
+def test_startup_timeout_terminates_without_waiting_for_drain(setup):
+    c,t,clock,e=setup; t.ready=False
+    t.drain=lambda *args: False
+    c.submit(payload()); c.tick()
+    clock[0]+=21; c.tick()
+    assert t.calls.count('terminate')==1
+    assert len(t.deleted)==1 and c.get_job('job1')['state']=='queued'
+    for _ in range(3): c.tick()
+    assert t.calls.count('create')==1 and c.health()['status']=='provisioning_held'
+
+
+def test_timeout_fences_late_success_and_stops_active_worker(setup):
+    c,t,clock,e=setup
+    entered=threading.Event(); release=threading.Event()
+    def active(w,r,p):
+        t.calls.append('infer'); entered.set(); release.wait(2)
+        return {'job_id':p['job_id'],'text':'late output','release_id':r['release_id']}
+    def cancelled(w,r,op):
+        t.calls.append('terminate');t.deleted.append(w);release.set()
+    t.infer=active;t.cancel_timed_out=cancelled;t.drain=lambda *args:False
+    c.submit(payload());c.tick();c.tick();assert entered.wait(1)
+    clock[0]+=11;c.tick();time.sleep(.03)
+    result=c.get_job('job1')
+    assert result['state']=='timed_out' and 'result' not in result
+    assert t.calls.count('terminate')==1 and t.calls.count('infer')==1
+
+
+def test_identified_create_timeout_cancels_in_same_tick(setup):
+    c,t,clock,e=setup
+    def timeout(r,op):
+        t.calls.append('create')
+        error=TimeoutError('provider accepted but response timed out')
+        error.worker_id='known-worker';error.operation_id=op
+        raise error
+    t.create=timeout
+    c.submit(payload());c.tick()
+    assert t.deleted==['known-worker'] and t.calls==['create','terminate']
+
+
+def test_creation_timeout_persists_hold_no_automatic_new_allocations(setup):
+    c,t,clock,e=setup;t.fail_create=True
+    c.submit(payload());c.tick()
+    for _ in range(4): c.tick()
+    assert t.calls.count('create')==1 and t.calls.count('terminate')==1
+    assert c.get_job('job1')['state']=='queued'
+    assert c.health()['status']=='provisioning_held'
+    assert c.health()['error_code']=='provisioning_timeout'
+    # A new explicitly approved release has its own policy/hold identity.
+    new=e.plan(config(),spec('d'));e.apply(new['release_id'],approved=True)
+    t.fail_create=False;c.tick();wait(c)
+    assert c.get_job('job1')['release_id']==new['release_id']
+
+
+def test_provisioning_hold_does_not_cancel_existing_healthy_worker_jobs(setup):
+    c,t,clock,e=setup
+    c.submit(payload());c.tick();c.tick();wait(c)
+    rid=c.store.deployment('speech')['desired_release']
+    with c.store.connect() as db:
+        db.execute('INSERT INTO ctl_provisioning_holds VALUES (?,?,?,?)',('speech',rid,'creation_timeout',clock[0]))
+    c.submit(payload('job2'));c.tick();wait(c,'job2')
+    assert c.get_job('job2')['state']=='done' and t.calls.count('create')==1

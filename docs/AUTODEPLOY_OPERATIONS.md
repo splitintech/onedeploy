@@ -40,3 +40,17 @@ The CLI serves only loopback and requires a separate controller bearer token. Re
 ## Rate changes and exhausted policy
 
 No budget or active-slot reservation is freed solely because time elapsed; verify provider deletion. Full lifetime reservations are conservative and can exhaust the approved cap even when actual usage was shorter. This is intentional, not a claimed billing reconciliation. Raising a cap or changing rates/runtime requires a new exact policy approval. Cost reserves do not guarantee vendor charges cannot differ.
+
+## Deadline cancellation policy
+
+Each live AutoDeploy worker is dedicated to one job at a time; parallelism uses separate workers. A job timeout must fence its lease, quarantine that worker and immediately request termination/deletion of the exact owned sandbox, even if inference is still active. Ordinary rolling-release drainage still waits for healthy active work. Timed-out results are uncertain and are not automatically replayed.
+
+An immediate deletion request is not a guarantee of immediate provider completion. Ownership, runtime/snapshot/allocation identity and confirmed absence remain mandatory. Failed or uncertain deletion stays durably pending for reconciliation; budget slots are released only after confirmed absence and cost reservations are not refunded. Every created worker also has an explicit finite provider-enforced TTL, so controller interruption cannot leave a deliberately never-expiring sandbox.
+
+This policy applies to human and agent/Codex callers invoking OneDeploy. It does not claim control over unrelated Codex-managed environments. Unsupported provider CLI/SDK paths must fail closed rather than silently omit the hard expiration setting.
+
+### Timeout termination and provisioning holds
+
+A timed-out inference is fenced immediately and its dedicated owned sandbox is stopped/deleted without waiting for graceful drain. Controller workers run one job each; use more workers for parallelism. The job remains `uncertain` until deletion is verified, then becomes `timed_out`. Late results are discarded. Legacy retry flags do not replay timed-out work. Candidate qualification and identified creation/bootstrap timeouts use the same termination path; an unidentified resource remains quarantined for deterministic inspection, never blind recreation.
+
+A pool creation/bootstrap timeout also records a durable provisioning hold for that release. Further ticks do not allocate replacement workers or silently reset the hold. Existing healthy workers may finish or serve queued jobs, and unassigned jobs remain queued within the normal retention limit. `/health` reports `provisioning_held` with `provisioning_timeout`. A new explicitly approved release uses a new hold identity; restarting the controller does not clear the old hold. Cancellation uncertainty retains capacity reservations; only verified provider absence releases the active allocation slot, without refunding already reserved spend.

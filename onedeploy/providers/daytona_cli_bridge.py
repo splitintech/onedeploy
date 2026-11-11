@@ -5,6 +5,8 @@ Raw CLI JSON, build output and errors never leave this process. No fallback to S
 Contract: daytona/clients v0.226.0. See docs/provider-contracts.md.
 """
 import json
+from datetime import datetime, timezone
+import secrets
 import os
 import re
 import subprocess
@@ -164,7 +166,7 @@ def summary(row, account):
         raise Failure()
     return {'exists': True, 'id': identifier(row.get('id')), 'name': identifier(row.get('name')),
             'account': account, 'state': row.get('state'), 'snapshot': row.get('snapshot'),
-            'public': row['public'], 'auto_stop_minutes': row.get('autoStopInterval'),
+            'public': row['public'], 'auto_stop_minutes': row.get('autoStopInterval'), 'auto_destroy_at':row.get('autoDestroyAt'),
             'readiness_verified': False}
 
 
@@ -192,6 +194,24 @@ def check_runtime(config, runtime):
         raise Failure('unsupported')
 
 
+def finite_lifetime(value, max_lifetime=86400):
+    try:
+        expiry=value if isinstance(value,datetime) else datetime.fromisoformat(value.replace('Z','+00:00'))
+        return 0 < (expiry-datetime.now(timezone.utc)).total_seconds() <= max_lifetime
+    except (TypeError,ValueError,AttributeError):
+        return False
+
+
+def cleanup_created(transport, name, account, lease):
+    try:
+        identity(transport,account)
+        row=json_call(transport,['info',name,'--format','json'],dict)
+        if row.get('organizationId')==account and row.get('name')==name and row.get('labels',{}).get('onedeploy-lease')==lease:
+            transport.call(['delete',identifier(row.get('id'))],mutating=True)
+    except Exception:
+        pass  # Never delete another lease; hard TTL remains the final bound.
+
+
 def execute(operation, config, transport, runtime=None):
     if operation not in {'identity', 'inspect', 'status', 'reconcile', 'create', 'snapshot-create', 'start', 'verify', 'verify-checks'}:
         raise Failure('unsupported')
@@ -208,12 +228,26 @@ def execute(operation, config, transport, runtime=None):
         if operation in {'create', 'snapshot-create'}:
             raise Failure('stale_plan')
         observed = info(transport, row['id'], account)
+        if operation in {'start','verify','verify-checks'} and not finite_lifetime(observed.get('auto_destroy_at')):
+            raise Failure('unsupported')
         if operation == 'start':
+            if not finite_lifetime(observed.get('auto_destroy_at')):
+                raise Failure('unsupported')
             approved = config.get('approved_inspection')
             if not isinstance(approved,dict) or approved != observed:
                 raise Failure('stale_plan')
             identity(transport, account)  # Refresh just before the write; no profile switching.
-            transport.call(['start', observed['id']], mutating=True)
+            deadline=getattr(transport,'deadline',None)
+            if deadline is not None:
+                transport.deadline=max(time.monotonic()+1,deadline-15)
+            try:
+                transport.call(['start', observed['id']], mutating=True)
+            except BaseException:
+                # A selected existing sandbox may be shared. Do not delete it.
+                raise
+            finally:
+                if deadline is not None:
+                    transport.deadline=deadline
             identity(transport, account)
             return info(transport, observed['id'], account)
         if operation in {'verify', 'verify-checks'}:
@@ -256,18 +290,36 @@ def execute(operation, config, transport, runtime=None):
     if not pinned or pinned != receipt:
         raise Failure('stale_plan')
     identity(transport, account)
+    ttl=config.get('ttl_minutes',15)
+    if type(ttl) is not int or not 1<=ttl<=1440:
+        raise Failure('unsupported')
+    lease=secrets.token_hex(16)
     args = ['create', '--name', name, '--snapshot', receipt['snapshot_id'], '--auto-stop', str(config['auto_stop_minutes']),
-            '--auto-delete', '-1', '--target', target.get('region', 'us'), '--label', 'onedeploy-managed=true']
+            '--auto-delete', '0', '--ttl', str(ttl), '--target', target.get('region', 'us'), '--label', 'onedeploy-managed=true', '--label', 'onedeploy-lease='+lease]
     for key in sorted(runtime):
         args += ['--env', key + '=' + runtime[key]]
     for volume in volumes:
         args += ['--volume', volume['id'] + ':' + volume['mount_path']]
-    transport.call(args, mutating=True)
-    identity(transport, account)
-    result = info(transport, name, account)
-    if result['public'] or result.get('snapshot') not in (receipt['snapshot_id'], snapshot_name):
-        raise Failure()
-    return {**result, **receipt}
+    deadline=getattr(transport,'deadline',None)
+    if deadline is not None:
+        transport.deadline=max(time.monotonic()+1,deadline-15)
+    try:
+        transport.call(args, mutating=True)
+        identity(transport, account)
+        result = info(transport, name, account)
+        if not finite_lifetime(result.get('auto_destroy_at'), ttl*60+30):
+            raise Failure()
+        if result['public'] or result.get('snapshot') not in (receipt['snapshot_id'], snapshot_name):
+            raise Failure()
+        return {**result, **receipt}
+    except BaseException:
+        if deadline is not None:
+            transport.deadline=deadline
+        cleanup_created(transport,name,account,lease)
+        raise
+    finally:
+        if deadline is not None:
+            transport.deadline=deadline
 
 
 def verify(transport, observed, config, *, checks_only=False):

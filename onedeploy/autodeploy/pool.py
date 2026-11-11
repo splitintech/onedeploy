@@ -59,8 +59,9 @@ class PoolPolicy:
 def decide(workers, queued_jobs, budget_remaining, policy):
     """Return an advisory snapshot, never mutate workers or claim reservations.
 
-    Existing in-flight jobs must finish even when TTL/budget is exhausted. A TTL
-    or idle-expired worker is only marked for draining while busy, never deleted.
+    Ordinary idle/budget drainage waits for in-flight jobs. This advisory function
+    does not authorize deletion: the controller separately terminates an exact
+    dedicated worker when its job deadline expires, under the timeout policy.
     Budget refers to *unreserved* remaining money after existing commitments.
     """
     policy.validate()

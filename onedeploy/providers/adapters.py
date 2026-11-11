@@ -101,7 +101,7 @@ class BaseAdapter:
         return {'railway':'5.71.0','modal':'1.6.2','daytona':'0.226.0'}[self.name]
 
     def version_command(self):
-        if self.name == 'daytona' and self.version == '2-sdk':
+        if self.name == 'daytona' and self.version == '3-sdk-ttl':
             argv = [sys.executable,'-I',str(Path(__file__).with_name('daytona_bridge.py').resolve()),'version','{}']
         else:
             argv = [self.name,'--version']
@@ -510,7 +510,7 @@ class ModalAdapter(BaseAdapter):
 
 
 class DaytonaSDKAdapter(BaseAdapter):
-    version = '2-sdk'
+    version = '3-sdk-ttl'
 
     @property
     def capabilities(self):
@@ -540,8 +540,11 @@ class DaytonaSDKAdapter(BaseAdapter):
             fail('Existing Daytona sandbox variables cannot be changed safely; plan a new snapshot sandbox')
         if t.get('region','us') not in {'us','eu'}:
             fail('Daytona region must be us or eu','invalid_config')
-        if set(manifest.get('resources',{})) - {'auto_stop_minutes'}:
+        if set(manifest.get('resources',{})) - {'auto_stop_minutes','ttl_minutes'}:
             fail('Snapshot CPU/memory/disk are inherited, not overridden')
+        ttl = manifest.get('resources',{}).get('ttl_minutes',15)
+        if type(ttl) is not int or not 1 <= ttl <= 1440:
+            fail('Daytona requires a finite ttl_minutes from 1 to 1440; zero is forbidden','invalid_config')
         build = manifest.get('build',{})
         if build:
             if mode != 'create' or t.get('snapshot') or not IDENTIFIER.fullmatch(build.get('snapshot_name','')):
@@ -599,7 +602,7 @@ class DaytonaSDKAdapter(BaseAdapter):
             fail('Remote preconditions changed','stale_plan')
 
     def _step(self, manifest, operation, mutating=False):
-        config = {'target':manifest['target'], 'build':manifest.get('build',{}), 'checks':manifest.get('checks',[]), 'storage':manifest.get('storage',[]), 'auto_stop_minutes':manifest.get('resources',{}).get('auto_stop_minutes',15),
+        config = {'target':manifest['target'], 'build':manifest.get('build',{}), 'checks':manifest.get('checks',[]), 'storage':manifest.get('storage',[]), 'auto_stop_minutes':manifest.get('resources',{}).get('auto_stop_minutes',15), 'ttl_minutes':manifest.get('resources',{}).get('ttl_minutes',15),
                   'timeout':manifest.get('runtime',{}).get('timeout',120),
                   'port':manifest.get('runtime',{}).get('port'),
                   'health_path':manifest.get('runtime',{}).get('health_path'),
@@ -634,7 +637,7 @@ class DaytonaSDKAdapter(BaseAdapter):
         if not isinstance(data,dict) or data.get('error'):
             fail('Daytona bridge returned an invalid result','provider_failed')
         # Bridge already emits a deliberately restricted nonsecret projection.
-        allowed = {'account','id','name','state','snapshot','public','exists','snapshot_id','snapshot_image','snapshot_pending','auto_stop_minutes','readiness_verified','process_running','health_verified','logs','truncated'}
+        allowed = {'account','id','name','state','snapshot','public','exists','snapshot_id','snapshot_image','snapshot_pending','auto_stop_minutes','auto_destroy_at','readiness_verified','process_running','health_verified','logs','truncated'}
         result = pick(data,allowed)
         if operation == 'verify-checks':
             result.update(pick(data,{'application_checks_passed','ingress_verified','reason'}))
@@ -665,7 +668,7 @@ class DaytonaSDKAdapter(BaseAdapter):
 
 class DaytonaAdapter(DaytonaSDKAdapter):
     """Default transport: official installed CLI, never SDK authentication fallback."""
-    version = '2-cli'
+    version = '3-cli-ttl'
 
     @property
     def capabilities(self):

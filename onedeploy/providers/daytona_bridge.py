@@ -4,6 +4,8 @@ Runtime values arrive on stdin, the API key through the process environment.
 No arbitrary URL, Python module, command, or credential path is accepted.
 """
 import contextlib
+from datetime import datetime, timezone
+import secrets
 import importlib.metadata
 import json
 import os
@@ -43,11 +45,32 @@ def scalar(value):
 
 
 def summary(sandbox):
+    expiry=getattr(sandbox,'auto_destroy_at',None)
+    expiry=expiry.isoformat() if isinstance(expiry,datetime) else expiry
     # Never dump SDK objects: sandbox.env contains application credentials.
     return {'exists':True,'id':sandbox.id,'name':sandbox.name,
             'account':sandbox.organization_id,'state':scalar(sandbox.state),
             'snapshot':sandbox.snapshot,'public':sandbox.public,
-            'auto_stop_minutes':sandbox.auto_stop_interval,'readiness_verified':False}
+            'auto_stop_minutes':sandbox.auto_stop_interval,'auto_destroy_at':expiry,'readiness_verified':False}
+
+
+def finite_lifetime(value, max_lifetime=86400):
+    try:
+        expiry = value if isinstance(value,datetime) else datetime.fromisoformat(value.replace('Z', '+00:00'))
+        seconds = (expiry - datetime.now(timezone.utc)).total_seconds()
+        return 0 < seconds <= max_lifetime
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
+def cleanup_created(client, name, account, lease, missing_error):
+    """Best-effort immediate deletion only of this exact newly allocated lease."""
+    try:
+        worker = client.get(name, request_timeout=5)
+        if worker.organization_id == account and worker.name == name and getattr(worker, 'labels', {}).get('onedeploy-lease') == lease:
+            client.delete(worker, timeout=10)
+    except Exception:
+        pass  # Provider-side TTL remains the independent final bound.
 
 
 def execute(operation, config, runtime, client, missing_error, params_type, image_type=None, snapshot_params_type=None, volume_type=None):
@@ -63,6 +86,8 @@ def execute(operation, config, runtime, client, missing_error, params_type, imag
             raise
         sandbox = None
     if sandbox is not None:
+        if operation in {'start','verify','verify-checks'} and not finite_lifetime(getattr(sandbox,'auto_destroy_at',None)):
+            raise ValueError('Existing sandbox has no valid finite lifetime')
         if sandbox.organization_id != target['account']:
             raise ValueError('Sandbox belongs to a different organization')
         if operation in {'create','snapshot-create'}:
@@ -76,7 +101,10 @@ def execute(operation, config, runtime, client, missing_error, params_type, imag
         if operation == 'verify-checks':
             return verify_checks(sandbox,config,runtime)
         if operation == 'start':
-            sandbox.start(timeout=config['timeout'])
+            if not finite_lifetime(getattr(sandbox,'auto_destroy_at',None)):
+                raise ValueError('Existing sandbox has no valid finite lifetime; create a new reviewed sandbox')
+            # Existing may be shared: managed labels are not exclusive ownership.
+            sandbox.start(timeout=max(1,config['timeout']-15))
             sandbox.refresh_data()
         return summary(sandbox)
     volumes = []
@@ -121,18 +149,32 @@ def execute(operation, config, runtime, client, missing_error, params_type, imag
     if operation != 'create':
         return {'exists':False,'account':target['account'], 'snapshot_id':snapshot.id,
                 'snapshot_image':snapshot.image_name,'volumes':volumes}
+    ttl = config.get('ttl_minutes',15)
+    if type(ttl) is not int or not 1 <= ttl <= 1440:
+        raise ValueError('A finite TTL from 1 to 1440 minutes is required')
+    lease = secrets.token_hex(16)
     params = params_type(name=name,snapshot=snapshot.id,env_vars=runtime,
                          public=False,auto_stop_interval=config['auto_stop_minutes'],
-                         auto_delete_interval=-1, target=target.get('region','us'),
-                         labels={'onedeploy-managed':'true'})
+                         auto_delete_interval=0, ttl_minutes=ttl, target=target.get('region','us'),
+                         labels={'onedeploy-managed':'true','onedeploy-lease':lease})
     if mounts:
         params.volumes = mounts
-    sandbox = client.create(params,timeout=config['timeout'])
-    if sandbox.organization_id != target['account']:
-        raise ValueError('Created sandbox organization does not match')
-    result = summary(sandbox)
-    result.update({'snapshot_id':snapshot.id,'snapshot_image':snapshot.image_name})
-    return result
+    try:
+        sandbox = client.create(params,timeout=max(1,config['timeout']-15))
+    except BaseException:
+        cleanup_created(client,name,target['account'],lease,missing_error)
+        raise
+    try:
+        if sandbox.organization_id != target['account']:
+            raise ValueError('Created sandbox organization does not match')
+        if not finite_lifetime(getattr(sandbox,'auto_destroy_at',None), ttl*60+30):
+            raise ValueError('Created sandbox has no verified finite lifetime within requested TTL')
+        result = summary(sandbox)
+        result.update({'snapshot_id':snapshot.id,'snapshot_image':snapshot.image_name})
+        return result
+    except BaseException:
+        cleanup_created(client,name,target['account'],lease,missing_error)
+        raise
 
 
 

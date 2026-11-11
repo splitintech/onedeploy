@@ -1,5 +1,6 @@
 """Fail-closed, journaled rollout coordination; no provider is selected implicitly."""
 from typing import Protocol
+import re
 import time
 
 from onedeploy.errors import OnedeployError
@@ -57,10 +58,30 @@ class Reconciler:
         self.store.save(pending)
         try:
             result = getattr(self.adapter, operation)(release)
+        except TimeoutError as error:
+            pending = self.store.save({**pending, "timeout_requested": True})
+            identified=getattr(error,"worker_id",None)
+            if (operation=="ensure_candidate" and isinstance(identified,str)
+                    and re.fullmatch(r"[A-Za-z0-9_.-]{1,200}",identified)
+                    and getattr(error,"operation_id","candidate")=="candidate"):
+                pending=self.store.save({**pending,"worker_id":identified,"worker_created_at":pending["pending_started_at"]})
+            if operation in {"qualify","ensure_candidate"} and pending.get("worker_id"):
+                return self._terminate_candidate(pending)
+            raise OnedeployError("uncertain", "Timed-out operation is quarantined pending resource identification.", uncertain=True, mutation_possible=True) from None
         except Exception:
             # Never persist provider exception text, which can contain credentials.
             raise OnedeployError("uncertain", "Provider operation needs read-only reconciliation.", uncertain=True, mutation_possible=True) from None
         return self._finish(pending, result)
+
+    def _terminate_candidate(self, release):
+        pending = self.store.save({**release, "pending_operation": "terminate", "state": "needs_reconciliation",
+                                   "resume_state": "failed", "failure_code": "candidate_timed_out",
+                                   "pending_started_at": time.time(), "timeout_requested": True})
+        try:
+            self.adapter.terminate(pending)
+        except Exception:
+            raise OnedeployError("uncertain", "Timed-out candidate termination is not yet verified.", uncertain=True, mutation_possible=True) from None
+        return self._finish(pending, None)
 
     def _finish(self, release, result):
         operation = release["pending_operation"]
@@ -88,6 +109,8 @@ class Reconciler:
             out.update(state=release["resume_state"], worker_drained=result)
         elif operation == "delete_worker":
             out.update(state=release["resume_state"], worker_deleted=True)
+        elif operation == "terminate":
+            out.update(state="failed", worker_deleted=True, failure_code="candidate_timed_out")
         else:
             raise OnedeployError("uncertain", "Unknown pending operation.", uncertain=True)
         return self.store.save(out)
@@ -113,6 +136,8 @@ class Reconciler:
             release = self.store.get(release_id)
             self._current(release)
             release = self._recover(release)
+            if release.get("timeout_requested") and release.get("worker_id") and not release.get("worker_deleted"):
+                return self._terminate_candidate(release)
             if release["state"] == "failed":
                 return release
             if release["state"] == "planned":

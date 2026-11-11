@@ -26,6 +26,7 @@ class Fake:
         return dict(ready=True, gpu=self.failure != "gpu", model_verified=True, inference_passed=True)
     def drain(self, r): self.calls.append("drain"); return self.drained
     def delete_worker(self, r): self.calls.append("delete")
+    def terminate(self, r): self.calls.append("terminate")
     def inspect_operation(self, r, op): self.calls.append("inspect"); return self.resolution
 
 
@@ -196,4 +197,47 @@ def test_candidate_created_time_is_intent_time_and_survives_recovery(engine, mon
     engine.adapter.resolution={'resolved':True,'result':'recovered-worker'}
     completed=engine.apply(release['release_id'],approved=True)
     assert completed['worker_created_at']==100.0
+    assert completed['state']=='failed' and completed['worker_deleted']
+    assert 'qualify' not in engine.adapter.calls and 'terminate' in engine.adapter.calls
     assert 'pending_started_at' not in completed
+
+
+def test_qualification_timeout_terminates_candidate_without_promotion(engine):
+    first=engine.plan(config(),spec()); engine.apply(first['release_id'],approved=True)
+    second=engine.plan(config(),spec('d'))
+    def timeout(r): raise TimeoutError('SECRET')
+    engine.adapter.qualify=timeout
+    result=engine.apply(second['release_id'],approved=True)
+    assert result['state']=='failed' and result['worker_deleted']
+    assert result['failure_code']=='candidate_timed_out'
+    assert engine.status('speech')['desired_release']==first['release_id']
+    assert engine.adapter.calls.count('terminate')==1
+
+
+def test_candidate_termination_unknown_stays_held_no_replay(engine):
+    r=engine.plan(config(),spec())
+    engine.adapter.qualify=lambda r: (_ for _ in ()).throw(TimeoutError())
+    def uncertain(r):
+        engine.adapter.calls.append('terminate'); raise RuntimeError('SECRET')
+    engine.adapter.terminate=uncertain
+    with pytest.raises(OnedeployError): engine.apply(r['release_id'],approved=True)
+    pending=engine.store.get(r['release_id'])
+    assert pending['pending_operation']=='terminate' and pending['state']=='needs_reconciliation'
+    with pytest.raises(OnedeployError): engine.apply(r['release_id'],approved=True)
+    assert engine.adapter.calls.count('terminate')==1
+    engine.adapter.resolution={'resolved':True,'result':None}
+    done=engine.apply(r['release_id'],approved=True)
+    assert done['state']=='failed' and done['worker_deleted']
+
+
+def test_identified_candidate_create_timeout_terminates_immediately(engine):
+    r=engine.plan(config(),spec())
+    def timeout(record):
+        error=TimeoutError('provider accepted but lost reply')
+        error.worker_id='identified-worker';error.operation_id='candidate'
+        raise error
+    engine.adapter.ensure_candidate=timeout
+    result=engine.apply(r['release_id'],approved=True)
+    assert result['state']=='failed' and result['worker_deleted']
+    assert result['worker_id']=='identified-worker' and engine.adapter.calls.count('terminate')==1
+    assert 'qualify' not in engine.adapter.calls

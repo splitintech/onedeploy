@@ -100,7 +100,7 @@ onedeploy autodeploy apply --plan /tmp/rollout-plan.json \
   --policy /secure/policy.json --approve-policy EXACT_POLICY_DIGEST --json
 ```
 
-The engine verifies account identity, creates/reuses the immutable snapshot, mounts existing model inputs, generates a private worker token, starts the fixed worker process, performs actual checksum/CUDA/model/synthetic qualification, atomically promotes the desired release and drains the previous worker. A negative qualification never promotes. Timeouts preserve pending intent and require read-only reconciliation, not blind retry.
+The engine verifies account identity, creates/reuses the immutable snapshot, mounts existing model inputs, generates a private worker token, starts the fixed worker process, performs actual checksum/CUDA/model/synthetic qualification, atomically promotes the desired release and drains the previous worker. A negative qualification never promotes. Candidate/job timeouts preserve pending intent and immediately request exact-owned dedicated-sandbox termination. Uncertain creation/deletion needs read-only identity/absence reconciliation, never a blind retry or success claim. Every sandbox has a finite hard TTL fallback.
 
 ## 7. Start the stable controller
 

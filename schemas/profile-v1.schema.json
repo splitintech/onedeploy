@@ -228,6 +228,11 @@
                         "maximum": 1048576,
                         "minimum": 0,
                         "type": "integer"
+                      },
+                      "ttl_minutes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1440
                       }
                     },
                     "required": [],
@@ -1136,6 +1141,11 @@
               "maximum": 1048576,
               "minimum": 0,
               "type": "integer"
+            },
+            "ttl_minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1440
             }
           },
           "required": [],
@@ -1598,6 +1608,11 @@
                   "maximum": 1048576,
                   "minimum": 0,
                   "type": "integer"
+                },
+                "ttl_minutes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1440
                 }
               },
               "required": [],

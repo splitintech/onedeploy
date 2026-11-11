@@ -2,8 +2,8 @@
 
 The injected transport must verify provider ownership on every operation. HTTP
 binds localhost by default; put a TLS reverse proxy in front for remote use.
-Payloads/results are sensitive local data, never logs. Job leases are at-least-
-once if retries are explicitly enabled; they are not an exactly-once promise.
+Payloads/results are sensitive local data, never logs. Timeout quarantines the
+job and terminates its dedicated worker; uncertain outcomes never auto-replay.
 """
 from __future__ import annotations
 
@@ -48,6 +48,8 @@ class Controller:
                  allow_retries=False, max_attempts=2, retention_seconds=86400,
                  max_queued_jobs=1000, clock=time.time):
         policy.validate()
+        if policy.concurrency_per_worker != 1:
+            _error("invalid_config", "Timeout termination requires one job per dedicated worker; scale across workers for parallelism.")
         if type(budget_usd) not in (int, float) or not math.isfinite(budget_usd) or budget_usd <= 0:
             _error("invalid_config", "A finite positive controller budget is required.")
         if type(max_attempts) is not int or not 1 <= max_attempts <= 5 or type(retention_seconds) is not int or retention_seconds < 60:
@@ -64,6 +66,7 @@ class Controller:
         self._futures = set()
         with store.connect() as db:
             db.executescript('''
+            CREATE TABLE IF NOT EXISTS ctl_provisioning_holds(deployment TEXT NOT NULL,release TEXT NOT NULL,reason TEXT NOT NULL,created REAL NOT NULL,PRIMARY KEY(deployment,release));
             CREATE TABLE IF NOT EXISTS ctl_health(deployment TEXT PRIMARY KEY, last_tick REAL, last_success REAL, status TEXT NOT NULL, error_code TEXT);
             CREATE TABLE IF NOT EXISTS ctl_budget(deployment TEXT PRIMARY KEY, cap REAL NOT NULL, reserved REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS ctl_workers(
@@ -133,17 +136,66 @@ class Controller:
             db.execute('UPDATE ctl_workers SET '+','.join(k+'=?' for k in values)+' WHERE operation=? AND deployment=?', (*values.values(), operation, self.deployment_id))
 
     def _recover_jobs(self, db, now):
-        stale = db.execute("SELECT id,operation,attempts FROM ctl_jobs WHERE deployment=? AND state='running' AND lease_until<?", (self.deployment_id, now)).fetchall()
+        stale = db.execute("SELECT id,operation FROM ctl_jobs WHERE deployment=? AND state='running' AND lease_until<=?", (self.deployment_id, now)).fetchall()
         for row in stale:
-            retry = self.allow_retries and row['attempts'] < self.max_attempts
-            db.execute('UPDATE ctl_jobs SET state=?,lease=NULL,lease_until=NULL,updated=? WHERE deployment=? AND id=?', ('queued' if retry else 'uncertain', now, self.deployment_id, row['id']))
-            # A timed-out request may still run remotely. Drain, never reuse it.
-            db.execute("UPDATE ctl_workers SET state='draining' WHERE operation=?", (row['operation'],))
+            # Timeout revokes the result lease before requesting destructive
+            # cancellation. Explicit legacy retry flags never replay this job.
+            db.execute("UPDATE ctl_jobs SET state='uncertain',payload=NULL,lease=NULL,lease_until=NULL,updated=? WHERE deployment=? AND id=?", (now,self.deployment_id,row['id']))
+            db.execute("UPDATE ctl_workers SET state='draining',pending='terminate' WHERE operation=?", (row['operation'],))
         # Tombstones retain IDs/hashes so expired jobs cannot silently execute again.
-        db.execute("UPDATE ctl_jobs SET state='expired',payload=NULL,result=NULL WHERE deployment=? AND state IN ('done','failed','uncertain') AND updated<?", (self.deployment_id, now-self.retention_seconds))
+        db.execute("UPDATE ctl_jobs SET state='expired',payload=NULL,result=NULL WHERE deployment=? AND state IN ('done','failed','uncertain','timed_out') AND updated<?", (self.deployment_id, now-self.retention_seconds))
         db.execute("UPDATE ctl_jobs SET state='expired',payload=NULL,result=NULL,updated=? WHERE deployment=? AND state='queued' AND created<?", (now, self.deployment_id, now-self.retention_seconds))
 
+    def _hold_provisioning(self, release_id, reason="creation_timeout"):
+        with self.store.connect() as db:
+            db.execute('INSERT OR IGNORE INTO ctl_provisioning_holds VALUES (?,?,?,?)',
+                       (self.deployment_id,release_id,reason,self.clock()))
+
+    def _request_termination(self, worker, job_id, lease):
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            changed=db.execute("UPDATE ctl_jobs SET state='uncertain',payload=NULL,lease=NULL,lease_until=NULL,updated=? WHERE deployment=? AND id=? AND state='running' AND lease=?",
+                               (self.clock(),self.deployment_id,job_id,lease)).rowcount
+            if changed:
+                db.execute("UPDATE ctl_workers SET state='draining',pending='terminate' WHERE operation=? AND deployment=?",
+                           (worker['operation'],self.deployment_id))
+            row=db.execute('SELECT * FROM ctl_workers WHERE operation=? AND deployment=?',
+                           (worker['operation'],self.deployment_id)).fetchone()
+        if row is not None and row['pending']=='terminate':
+            self._terminate(row,self.store.get(row['release']))
+
+    def _quarantine_worker(self, row):
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute("UPDATE ctl_jobs SET state='uncertain',payload=NULL,lease=NULL,lease_until=NULL,updated=? WHERE operation=? AND deployment=? AND state='running'",
+                       (self.clock(),row['operation'],self.deployment_id))
+            db.execute("UPDATE ctl_workers SET state='draining',pending='terminate' WHERE operation=? AND deployment=?",
+                       (row['operation'],self.deployment_id))
+            return db.execute('SELECT * FROM ctl_workers WHERE operation=? AND deployment=?',
+                              (row['operation'],self.deployment_id)).fetchone()
+
+    def _terminate(self, row, release):
+        if not row['worker']:
+            return
+        try:
+            # No graceful-drain prerequisite: the caller explicitly authorizes
+            # stopping this dedicated owned sandbox even while its job runs.
+            operation = 'candidate' if row['operation']=='candidate-'+release['release_id'] else row['operation']
+            self.transport.cancel_timed_out(row['worker'],release,operation)
+        except Exception:
+            return  # Keep uncertain and quarantined until deletion is verified.
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute("UPDATE ctl_workers SET state='deleted',pending=NULL WHERE operation=? AND deployment=?",
+                       (row['operation'],self.deployment_id))
+            db.execute("UPDATE ctl_jobs SET state='timed_out',payload=NULL,result=NULL,updated=? WHERE operation=? AND deployment=? AND state='uncertain'",
+                       (self.clock(),row['operation'],self.deployment_id))
+        if release.get('worker_id') == row['worker']:
+            self.store.save({**release,'worker_deleted':True})
+
     def _cleanup(self, row, release):
+        if row['pending']=='terminate':
+            return self._terminate(row,release)
         if not row['worker']:
             return  # Unknown create remains held until provider inspection resolves it.
         self._update_worker(row['operation'], state='draining', pending='drain')
@@ -198,6 +250,7 @@ class Controller:
                 jobs={r['state']:r['n'] for r in db.execute('SELECT state,COUNT(*) AS n FROM ctl_jobs WHERE deployment=? GROUP BY state',(self.deployment_id,))}
                 workers={r['state']:r['n'] for r in db.execute("SELECT state,COUNT(*) AS n FROM ctl_workers WHERE deployment=? AND state!='deleted' GROUP BY state",(self.deployment_id,))}
                 budget=db.execute('SELECT cap,reserved FROM ctl_budget WHERE deployment=?',(self.deployment_id,)).fetchone()
+                held=db.execute('SELECT 1 FROM ctl_provisioning_holds h JOIN deployments d ON d.id=h.deployment AND d.desired=h.release WHERE h.deployment=?',(self.deployment_id,)).fetchone()
                 pending=db.execute("SELECT COUNT(*) FROM ctl_workers WHERE deployment=? AND state!='deleted' AND pending IS NOT NULL",(self.deployment_id,)).fetchone()[0]
                 overdue=db.execute("SELECT COUNT(*) FROM ctl_workers WHERE deployment=? AND state!='deleted' AND pending IS NOT NULL AND created<?",(self.deployment_id,self.clock()-self.policy.startup_timeout_seconds)).fetchone()[0]
             if row is None:
@@ -207,6 +260,8 @@ class Controller:
             error_code=row['error_code']
             if overdue:
                 status,error_code='blocked','uncertain'
+            if held:
+                status,error_code='provisioning_held','provisioning_timeout'
             if status=='running' and jobs.get('queued',0) and not workers.get('ready',0):
                 status='warming' if workers.get('starting',0) else 'blocked'
             if not fresh and status=='running':
@@ -258,10 +313,13 @@ class Controller:
                     except Exception:
                         recovered = None
                     if recovered:
-                        self._update_worker(row['operation'], worker=recovered, pending='qualify')
+                        self._update_worker(row['operation'], worker=recovered, pending='terminate' if row['pending']=='terminate' else 'qualify')
                         with self.store.connect() as db:
                             row = db.execute('SELECT * FROM ctl_workers WHERE operation=?', (row['operation'],)).fetchone()
-                if row['release'] != desired_id or row['state'] == 'draining' or now-row['created'] >= self.policy.worker_ttl_seconds:
+                if self.clock()-row['created'] >= self.policy.worker_ttl_seconds:
+                    self._terminate(self._quarantine_worker(row),old_release)
+                    continue
+                if row['release'] != desired_id or row['state'] == 'draining':
                     self._cleanup(row, old_release)
                     continue
                 if row['state'] == 'starting':
@@ -276,14 +334,20 @@ class Controller:
                         self._update_worker(row['operation'], worker=worker_id, pending='qualify')
                     try:
                         ready = self.transport.qualify(worker_id, old_release)
+                    except TimeoutError:
+                        self._hold_provisioning(old_release['release_id'],'startup_timeout')
+                        self._terminate(self._quarantine_worker(row),old_release)
+                        continue
                     except Exception:
                         ready = False
-                    if ready is True:
+                    adopted_ready = (row['operation']=='candidate-'+old_release['release_id'] and old_release.get('qualification') and ready is True)
+                    if (self.clock()-row['created'] >= self.policy.worker_ttl_seconds
+                            or (self.clock()-row['created'] >= self.policy.startup_timeout_seconds and not adopted_ready)):
+                        if not adopted_ready:
+                            self._hold_provisioning(old_release['release_id'],'startup_timeout')
+                        self._terminate(self._quarantine_worker(row),old_release)
+                    elif ready is True:
                         self._update_worker(row['operation'], state='ready', pending=None)
-                    elif now-row['created'] >= self.policy.startup_timeout_seconds:
-                        with self.store.connect() as db:
-                            current = db.execute('SELECT * FROM ctl_workers WHERE operation=?', (row['operation'],)).fetchone()
-                        self._cleanup(current, old_release)
             # Provider qualification/cleanup can consume minutes. Never make
             # admissions from the tick-start timestamp.
             now = self.clock()
@@ -297,6 +361,11 @@ class Controller:
             for operation in decision['delete_workers'] + decision['drain_workers']:
                 row = next(r for r in rows if r['operation'] == operation)
                 self._cleanup(row, self.store.get(row['release']))
+            with self.store.connect() as db:
+                held=db.execute('SELECT 1 FROM ctl_provisioning_holds WHERE deployment=? AND release=?',
+                                (self.deployment_id,desired_id)).fetchone()
+            if held:
+                decision['create_workers']=0
             for _ in range(decision['create_workers']):
                 now = self.clock()
                 operation = uuid.uuid4().hex
@@ -315,6 +384,18 @@ class Controller:
                     if not isinstance(worker,str) or not worker or len(worker)>200:
                         continue
                     self._update_worker(operation, worker=worker, pending='qualify')
+                except TimeoutError as error:
+                    self._hold_provisioning(desired_id)
+                    identified=getattr(error,'worker_id',None)
+                    values={'state':'draining','pending':'terminate'}
+                    if (isinstance(identified,str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,200}',identified)
+                            and getattr(error,'operation_id',operation)==operation):
+                        values['worker']=identified
+                    self._update_worker(operation,**values)
+                    with self.store.connect() as db:
+                        timed_out=db.execute('SELECT * FROM ctl_workers WHERE operation=?',(operation,)).fetchone()
+                    self._terminate(timed_out,release)
+                    break  # Hold prevents a fresh allocation after ambiguous startup.
                 except Exception:
                     pass  # intent remains durable, subsequent ticks inspect only
             # Claims use desired pointer in the same SQL transaction. A promotion
@@ -323,7 +404,10 @@ class Controller:
             for assignment in decision['assignments']:
                 for _ in range(assignment['jobs']):
                     self._claim(assignment['worker_id'], desired_id)
-            return {'state':'running', 'desired_release':desired_id, 'decision':decision}
+            with self.store.connect() as db:
+                held=db.execute('SELECT 1 FROM ctl_provisioning_holds WHERE deployment=? AND release=?',
+                                (self.deployment_id,desired_id)).fetchone()
+            return {'state':'provisioning_held' if held else 'running', 'desired_release':desired_id, 'decision':decision}
 
     def _claim(self, operation, desired_id):
         if len(self._futures) >= self.policy.max_workers * self.policy.concurrency_per_worker:
@@ -375,17 +459,24 @@ class Controller:
                 if now + self.policy.job_timeout_seconds > deadline:
                     db.execute("UPDATE ctl_workers SET state='draining' WHERE operation=?", (worker['operation'],))
                 return
+            request_deadline=now+self.policy.job_timeout_seconds
             db.execute('UPDATE ctl_jobs SET lease_until=? WHERE deployment=? AND id=? AND lease=?',
-                       (now+self.policy.job_timeout_seconds,self.deployment_id,job_id,lease))
+                       (request_deadline,self.deployment_id,job_id,lease))
         try:
             release = self.store.get(worker['release'])
             result = self.transport.infer(worker['worker'], release, payload)
             if not isinstance(result,dict) or set(result) != {'job_id','text','release_id'} or result['job_id'] != job_id or result['release_id'] != worker['release'] or not isinstance(result['text'],str) or len(result['text']) > 100000:
                 raise ValueError('Invalid worker output')
+            if self.clock() >= request_deadline:
+                self._request_termination(worker,job_id,lease)
+                return
             output, state = _json(result), 'done'
+        except TimeoutError:
+            self._request_termination(worker,job_id,lease)
+            return
         except Exception:
-            # Unknown completion cannot be silently re-executed. Lease recovery
-            # is the explicit, bounded at-least-once mechanism.
+            # Unknown completion is fenced at its deadline and its worker is
+            # terminated. No automatic replay is permitted.
             return
         with self.store.connect() as db:
             db.execute("UPDATE ctl_jobs SET state=?,result=?,payload=NULL,lease=NULL,lease_until=NULL,updated=? WHERE deployment=? AND id=? AND state='running' AND lease=?", (state,output,self.clock(),self.deployment_id,job_id,lease))
