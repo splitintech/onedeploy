@@ -46,3 +46,16 @@ The Docker build runs `python3 /opt/onedeploy/launch.py --smoke` as the runtime 
 Decoded audio is capped at **120 seconds** (mono 16 kHz, at most 1,920,000 output samples). PyAV iterates packets/frames, checks cumulative decoded duration before resampling/array accumulation, and rejects overlong or unsupported input before GPU inference. A small compressed file cannot bypass the duration limit. Input must contain exactly one audio stream; 8–192 kHz input and up to eight channels are accepted and resampled to mono. Empty audio is rejected.
 
 A disconnected HTTP request alone cannot cancel a GPU thread. The AutoDeploy controller therefore handles a job timeout by fencing its lease and immediately requesting deletion of the exact dedicated owned sandbox, intentionally stopping active work. It verifies absence before marking timeout cleanup complete or freeing a capacity slot. The result is never reported as successful and the job is not replayed automatically. Unknown provider deletion stays quarantined and pending, with finite hard TTL as fallback. Direct HTTP clients without that controller do not receive this lifecycle guarantee. Shared model volumes are not deleted.
+
+## Gateway cancellation
+
+The controller (not the worker) accepts authenticated `DELETE /jobs/<job_id>`.
+Queued jobs become `cancelled` without allocating a worker. Running jobs first
+lose their result lease, then request deletion of their exact dedicated worker.
+The response is `202`/`cancelling` until deletion is verified, then `200`/`cancelled`.
+Finished jobs remain finished; cancellation does not delete a worker serving later
+jobs. Cancellation is idempotent and cannot replay a job. Provider failure may
+delay destruction; finite hard TTL remains a fallback. Callers must stop polling
+and never interpret an unknown cancellation outcome as confirmed deletion.
+A client timeout must issue this cancellation request; merely closing HTTP is not
+sufficient. Only trusted application gateways may hold the controller token.
